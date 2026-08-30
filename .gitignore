@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+flash_logs/*
+!flash_logs/.gitkeep
+.DS_Store

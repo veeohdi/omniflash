@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OmniFlash — Pixel 4 XL (coral) Flasher</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body class="theme-dark">
+    <!-- Risk Acknowledgement Overlay -->
+    <div id="risk-modal" class="modal-overlay">
+        <div class="modal-card risk-card">
+            <div class="risk-header">
+                <div class="risk-icon">⚠️</div>
+                <h2>High-Stakes Firmware Flasher</h2>
+            </div>
+            <div class="risk-body">
+                <p><strong>OmniFlash is designed specifically for the Google Pixel 4 XL (codename: <code>coral</code>).</strong></p>
+                <p>Flashing firmware carries an inherent risk of bricking your device if interrupted or misused.</p>
+                <ul>
+                    <li>Use <strong>only official Google factory images</strong> downloaded directly from developers.google.com.</li>
+                    <li>Always use a high-quality, reliable USB cable connected directly to your computer (avoid unpowered hubs).</li>
+                    <li>Ensure your phone has at least <strong>30% battery</strong>.</li>
+                    <li>Flashing will <strong>completely wipe all user data</strong> on the device.</li>
+                </ul>
+            </div>
+            <div class="risk-footer">
+                <button id="btn-ack-risk" class="btn btn-warning">I Understand the Risks &amp; Have Backed Up My Data</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirmation Modal (Dynamic for UNLOCK, FLASH, LOCK) -->
+    <div id="confirm-modal" class="modal-overlay hidden">
+        <div class="modal-card">
+            <h3 id="confirm-title">Confirm Action</h3>
+            <p id="confirm-desc" class="confirm-desc"></p>
+            <div class="form-group">
+                <label id="confirm-label" for="confirm-input">Type confirmation phrase to proceed:</label>
+                <input type="text" id="confirm-input" class="confirm-input" autocomplete="off" spellcheck="false" placeholder="">
+            </div>
+            <div class="modal-actions">
+                <button id="btn-confirm-cancel" class="btn btn-outline">Cancel</button>
+                <button id="btn-confirm-submit" class="btn btn-danger" disabled>Proceed</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="brand">
+                <div class="logo-badge">⚡</div>
+                <div>
+                    <h1>OmniFlash</h1>
+                    <p class="subtitle">Pixel 4 XL (<code>coral</code>) Official Factory Image Flasher</p>
+                </div>
+            </div>
+            <div class="header-badges">
+                <span class="badge badge-coral">Hardware: Pixel 4 XL (coral)</span>
+                <span id="header-conn-badge" class="badge badge-disconnected">Device: Disconnected</span>
+            </div>
+        </header>
+
+        <!-- Main Layout -->
+        <main class="main-layout">
+            <!-- Left Controls Column -->
+            <div class="controls-column">
+                
+                <!-- Card 1: Device State -->
+                <section class="card glass">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <span class="step-num">1</span>
+                            <h3>Device State &amp; Connection</h3>
+                        </div>
+                        <button id="btn-refresh-state" class="btn-icon" title="Refresh Device State">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="status-grid">
+                            <div class="status-item">
+                                <span class="status-label">Mode:</span>
+                                <span id="dev-mode" class="status-value highlight">—</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">Codename:</span>
+                                <span id="dev-product" class="status-value">—</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">Serial:</span>
+                                <span id="dev-serial" class="status-value font-mono">—</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">Bootloader:</span>
+                                <span id="dev-bootloader" class="status-value">—</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">Current OS:</span>
+                                <span id="dev-build" class="status-value">—</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">Battery:</span>
+                                <span id="dev-battery" class="status-value">—</span>
+                            </div>
+                        </div>
+
+                        <!-- Bootloader Unlock Trigger (if locked) -->
+                        <div id="unlock-prompt" class="action-prompt hidden">
+                            <p class="warn-text">⚠️ Bootloader is locked. Unlocking is required before flashing factory images.</p>
+                            <button id="btn-unlock-bootloader" class="btn btn-warning btn-block">Unlock Bootloader (fastboot flashing unlock)</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Card 2: Image Selection & Checksum -->
+                <section class="card glass">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <span class="step-num">2</span>
+                            <h3>Factory Image &amp; SHA-256 Checksum</h3>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="help-text">Select your downloaded official Google factory image zip (e.g. <code>coral-rq3a.211001.001-factory-*.zip</code>):</p>
+                        
+                        <div class="input-row">
+                            <input type="text" id="image-path-input" class="form-input font-mono" placeholder="/path/to/coral-*-factory-*.zip">
+                            <button id="btn-inspect-image" class="btn btn-primary">Inspect Zip</button>
+                        </div>
+
+                        <!-- Inspection Results -->
+                        <div id="image-details" class="image-details-box hidden">
+                            <div class="detail-row">
+                                <span class="detail-label">File:</span>
+                                <span id="img-filename" class="detail-val font-mono"></span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Target OS:</span>
+                                <span id="img-version" class="detail-val badge badge-cyan"></span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Build ID:</span>
+                                <span id="img-build-id" class="detail-val font-mono"></span>
+                            </div>
+                            <div class="detail-row hash-row">
+                                <span class="detail-label">SHA-256:</span>
+                                <span id="img-sha256" class="detail-val font-mono hash-text"></span>
+                            </div>
+
+                            <div class="checksum-verify-banner">
+                                <p>🔗 Verify hash against: <a href="https://developers.google.com/android/images#coral" target="_blank" rel="noopener">Google Pixel Factory Images Page (coral)</a></p>
+                                <label class="checkbox-container">
+                                    <input type="checkbox" id="chk-verify-hash">
+                                    <span class="checkmark"></span>
+                                    <strong>I have manually cross-checked this SHA-256 checksum against Google's official page for this exact build.</strong>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Card 3: Execute Flash -->
+                <section class="card glass">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <span class="step-num">3</span>
+                            <h3>Flash Firmware</h3>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="help-text">Runs Google's official <code>flash-all</code> sequence directly against your Pixel 4 XL.</p>
+                        <button id="btn-start-flash" class="btn btn-danger btn-block btn-lg" disabled>
+                            ⚡ Flash Factory Image (Type 'FLASH')
+                        </button>
+                    </div>
+                </section>
+
+                <!-- Card 4: Post-Boot Verification & Optional Relock -->
+                <section id="card-verify" class="card glass">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <span class="step-num">4</span>
+                            <h3>Post-Boot Verification &amp; Relock</h3>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div id="verify-status-box" class="verify-box">
+                            <span id="verify-spinner" class="spinner"></span>
+                            <span id="verify-msg">Waiting for flash to finish...</span>
+                        </div>
+                        <div id="relock-container" class="relock-box hidden">
+                            <p class="help-text">Device has booted successfully into stock Android. You may optionally relock the bootloader for production QA security:</p>
+                            <button id="btn-relock" class="btn btn-outline-warning btn-block">Relock Bootloader (fastboot flashing lock)</button>
+                        </div>
+                    </div>
+                </section>
+
+            </div>
+
+            <!-- Right Terminal Column -->
+            <div class="terminal-column">
+                <div class="terminal-card glass">
+                    <div class="terminal-header">
+                        <div class="terminal-title">
+                            <span class="term-dot"></span>
+                            <span>Live Console &amp; Fastboot Stream</span>
+                        </div>
+                        <div class="terminal-actions">
+                            <button id="btn-clear-term" class="btn btn-xs btn-outline">Clear</button>
+                        </div>
+                    </div>
+                    <div id="terminal-output" class="terminal-body font-mono">
+                        <div class="log-line sys">[SYSTEM] OmniFlash Pixel 4 XL (coral) Flasher initialized.</div>
+                        <div class="log-line sys">[SYSTEM] Ready for device connection.</div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
