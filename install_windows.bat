@@ -1,7 +1,7 @@
 @echo off
 setlocal
 echo =====================================================
-echo ⚡ Installing OmniFlash (Windows)
+echo Installing OmniFlash (Windows)
 echo =====================================================
 echo.
 
@@ -18,7 +18,7 @@ python -m pip install flask
 
 echo.
 echo =====================================================
-echo ✓ Installation Complete!
+echo Installation Complete!
 echo Run OmniFlash by double-clicking run.bat
 echo =====================================================
 pause

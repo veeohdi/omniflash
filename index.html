@@ -12,7 +12,7 @@
     <div id="risk-modal" class="modal-overlay">
         <div class="modal-card risk-card">
             <div class="risk-header">
-                <div class="risk-icon">⚠️</div>
+                <div class="risk-icon">!</div>
                 <h2>High-Stakes Firmware Flasher</h2>
             </div>
             <div class="risk-body">
@@ -51,7 +51,9 @@
         <!-- Header -->
         <header class="app-header">
             <div class="brand">
-                <div class="logo-badge">⚡</div>
+                <div class="logo-badge">
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                </div>
                 <div>
                     <h1>OmniFlash</h1>
                     <p class="subtitle">Pixel 4 XL (<code>coral</code>) Official Factory Image Flasher</p>
@@ -109,7 +111,7 @@
 
                         <!-- Bootloader Unlock Trigger (if locked) -->
                         <div id="unlock-prompt" class="action-prompt hidden">
-                            <p class="warn-text">⚠️ Bootloader is locked. Unlocking is required before flashing factory images.</p>
+                            <p class="warn-text">Bootloader is locked. Unlocking is required before flashing factory images.</p>
                             <button id="btn-unlock-bootloader" class="btn btn-warning btn-block">Unlock Bootloader (fastboot flashing unlock)</button>
                         </div>
                     </div>
@@ -151,7 +153,7 @@
                             </div>
 
                             <div class="checksum-verify-banner">
-                                <p>🔗 Verify hash against: <a href="https://developers.google.com/android/images#coral" target="_blank" rel="noopener">Google Pixel Factory Images Page (coral)</a></p>
+                                <p>Verify hash against: <a href="https://developers.google.com/android/images#coral" target="_blank" rel="noopener">Google Pixel Factory Images Page (coral)</a></p>
                                 <label class="checkbox-container">
                                     <input type="checkbox" id="chk-verify-hash">
                                     <span class="checkmark"></span>
@@ -173,7 +175,7 @@
                     <div class="card-body">
                         <p class="help-text">Runs Google's official <code>flash-all</code> sequence directly against your Pixel 4 XL.</p>
                         <button id="btn-start-flash" class="btn btn-danger btn-block btn-lg" disabled>
-                            ⚡ Flash Factory Image (Type 'FLASH')
+                            Flash Factory Image (Type 'FLASH')
                         </button>
                     </div>
                 </section>

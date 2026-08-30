@@ -6,7 +6,7 @@
 set -e
 
 echo "====================================================="
-echo "⚡ Installing OmniFlash (Pixel 4 XL Flasher for macOS)"
+echo "Installing OmniFlash (Pixel 4 XL Flasher for macOS)"
 echo "====================================================="
 
 if ! command -v python3 &> /dev/null; then
@@ -32,6 +32,6 @@ chmod +x "$APP_DIR/run.sh" "$APP_DIR/wait_for_server.py"
 
 echo ""
 echo "====================================================="
-echo "✓ Installation Complete!"
+echo "Installation Complete!"
 echo "Run OmniFlash with: ./run.sh"
 echo "====================================================="

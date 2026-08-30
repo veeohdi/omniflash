@@ -7,7 +7,7 @@ if ! command -v python3 &> /dev/null; then
 fi
 
 echo "====================================================="
-echo "⚡ Starting OmniFlash — Pixel 4 XL (coral) Flasher..."
+echo "Starting OmniFlash — Pixel 4 XL (coral) Flasher..."
 echo "====================================================="
 
 # Ensure we are in the script's directory

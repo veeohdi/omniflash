@@ -30,7 +30,7 @@ def check_dependencies():
         print("[!] Flask is not installed. Installing automatically...")
         try:
             subprocess.run([sys.executable, "-m", "pip", "install", "flask", "--break-system-packages"], check=True)
-            print("[✓] Flask installed successfully! Starting server...\n")
+            print("[+] Flask installed successfully! Starting server...\n")
         except Exception as e:
             print(f"[!] Failed to auto-install Flask: {e}")
             print("    Please run: pip install flask")
@@ -621,7 +621,7 @@ def api_bootloader_unlock():
                 else:
                     broadcast_terminal(f"\n[!] Unlock command exited with code {res.returncode}.", "error")
             else:
-                broadcast_terminal("\n[✓] Fastboot unlock signal sent.", "success")
+                broadcast_terminal("\n[+] Fastboot unlock signal sent.", "success")
                 broadcast_terminal("    ACTION REQUIRED: Look at your phone screen now. Use Volume keys to select 'UNLOCK THE BOOTLOADER' and press Power button.", "warn")
 
         except Exception as e:
@@ -674,7 +674,7 @@ def api_flash_start():
         temp_extract_dir = None
         try:
             broadcast_terminal("=====================================================", "sys")
-            broadcast_terminal("⚡ STARTING FACTORY IMAGE FLASH FOR PIXEL 4 XL (coral)", "warn")
+            broadcast_terminal("STARTING FACTORY IMAGE FLASH FOR PIXEL 4 XL (coral)", "warn")
             broadcast_terminal("=====================================================", "sys")
             
             # Step 1: Query & Verify Device State
@@ -787,7 +787,7 @@ def api_flash_start():
                 broadcast_terminal(f"    Check session log for details: {logfile}", "error")
             else:
                 broadcast_terminal("\n=====================================================", "success")
-                broadcast_terminal("✓ FLASH-ALL SCRIPT COMPLETED SUCCESSFULLY!", "success")
+                broadcast_terminal("FLASH-ALL SCRIPT COMPLETED SUCCESSFULLY!", "success")
                 broadcast_terminal("The device is now rebooting into Android for its first boot.", "success")
                 broadcast_terminal("Initial boot may take 2-4 minutes. Keep USB connected.", "sys")
                 broadcast_terminal("=====================================================\n", "success")
@@ -908,7 +908,7 @@ def api_bootloader_relock():
                     log_to_file(logfile, line)
 
             if res.returncode == 0:
-                broadcast_terminal("\n[✓] Relock command sent.", "success")
+                broadcast_terminal("\n[+] Relock command sent.", "success")
                 broadcast_terminal("    ACTION REQUIRED: Look at your phone screen now. Use Volume keys to select 'LOCK THE BOOTLOADER' and press Power button.", "warn")
             else:
                 broadcast_terminal(f"\n[!] Relock failed with exit code {res.returncode}.", "error")
@@ -926,7 +926,7 @@ def api_bootloader_relock():
 
 if __name__ == '__main__':
     print("=====================================================")
-    print("⚡ OmniFlash — Pixel 4 XL (coral) Flasher")
+    print("OmniFlash — Pixel 4 XL (coral) Flasher")
     print("=====================================================")
     print(f"  ADB:      {adb_path}")
     print(f"  Fastboot: {fastboot_path}")

@@ -198,18 +198,18 @@ document.addEventListener('DOMContentLoaded', () => {
         headerConnBadge.textContent = `Pixel 4 XL (${data.mode.toUpperCase()})`;
         
         devMode.textContent = data.mode.toUpperCase();
-        devProduct.textContent = 'Pixel 4 XL (coral) ✓';
+        devProduct.textContent = 'Pixel 4 XL (coral)';
         devSerial.textContent = data.serial;
 
         if (data.mode === 'android') {
             devBuild.textContent = `Android ${data.android_version} (${data.build_id})`;
             devBattery.textContent = data.battery_level >= 0 ? `${data.battery_level}%` : 'Unknown';
             if (data.bootloader_locked === true) {
-                devBootloader.textContent = 'LOCKED ⚠️';
+                devBootloader.textContent = 'LOCKED';
                 devBootloader.style.color = 'var(--accent-amber)';
                 unlockPrompt.classList.remove('hidden');
             } else if (data.bootloader_locked === false) {
-                devBootloader.textContent = 'UNLOCKED ✓';
+                devBootloader.textContent = 'UNLOCKED';
                 devBootloader.style.color = 'var(--accent-green)';
                 unlockPrompt.classList.add('hidden');
             } else {
@@ -221,11 +221,11 @@ document.addEventListener('DOMContentLoaded', () => {
             devBuild.textContent = 'Bootloader Fastboot';
             devBattery.textContent = data.battery_voltage ? `${data.battery_voltage} mV` : 'Fastboot Connected';
             if (data.bootloader_unlocked === false) {
-                devBootloader.textContent = 'LOCKED ⚠️';
+                devBootloader.textContent = 'LOCKED';
                 devBootloader.style.color = 'var(--accent-amber)';
                 unlockPrompt.classList.remove('hidden');
             } else if (data.bootloader_unlocked === true) {
-                devBootloader.textContent = 'UNLOCKED ✓';
+                devBootloader.textContent = 'UNLOCKED';
                 devBootloader.style.color = 'var(--accent-green)';
                 unlockPrompt.classList.add('hidden');
             } else {
@@ -332,7 +332,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!inspectedImage || !chkVerifyHash.checked) return;
 
         requestTypedConfirmation(
-            '⚡ Confirm Firmware Flash',
+            'Confirm Firmware Flash',
             `You are about to flash <strong>Android ${inspectedImage.android_version} (${inspectedImage.build_id})</strong> onto your Pixel 4 XL.<br><br>
             <strong>All user data will be wiped.</strong> Keep USB connected throughout.`,
             'FLASH',
@@ -389,7 +389,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     clearInterval(verifyInterval);
                     verifyInterval = null;
                     isFlashing = false;
-                    verifyMsg.innerHTML = `<span style="color: var(--accent-green)">✓ ${data.message}</span>`;
+                    verifyMsg.innerHTML = `<span style="color: var(--accent-green)">${data.message}</span>`;
                     relockContainer.classList.remove('hidden');
                     updateFlashButtonState();
                     logToTerminal(`[VERIFIED] ${data.message}`, 'success');

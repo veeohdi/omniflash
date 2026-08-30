@@ -11,7 +11,7 @@ if %errorlevel% neq 0 (
 )
 
 echo =====================================================
-echo ⚡ Starting OmniFlash — Pixel 4 XL (coral) Flasher...
+echo Starting OmniFlash — Pixel 4 XL (coral) Flasher...
 echo =====================================================
 echo.
 

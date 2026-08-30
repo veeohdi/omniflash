@@ -1,10 +1,10 @@
-# OmniFlash ⚡ (Pixel 4 XL `coral` Factory Image Flasher)
+# OmniFlash (Pixel 4 XL `coral` Factory Image Flasher)
 
 A high-stakes, defensive local web tool for safely flashing official Google Android factory images (Android 10, 11, 12, and 13) onto a physical **Google Pixel 4 XL (codename: `coral`)** for QA testing.
 
 ---
 
-## 🛡️ Built-in Safety Guardrails
+## Built-in Safety Guardrails
 
 - **Strict Codename Enforcement**: Before any action, verifies `product: coral` / `ro.product.device == coral`. Non-coral devices are immediately halted.
 - **Single-Device Lockdown**: Stops immediately if 0 or >1 devices are connected to prevent targeting the wrong device.
@@ -18,7 +18,7 @@ A high-stakes, defensive local web tool for safely flashing official Google Andr
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Ubuntu / Linux
 ```bash
@@ -38,7 +38,7 @@ A high-stakes, defensive local web tool for safely flashing official Google Andr
 
 ---
 
-## 📋 Flashing Workflow
+## Flashing Workflow
 
 1. **Acknowledge Risk Banner**: Confirm backup and device understanding.
 2. **Connect Device**: Plug in your Pixel 4 XL via a direct USB connection.
