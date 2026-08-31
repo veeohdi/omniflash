@@ -29,6 +29,7 @@ fi
 if ! groups "$USER" | grep &>/dev/null '\bplugdev\b'; then
     sudo usermod -aG plugdev "$USER" || true
     echo "[i] Added $USER to plugdev group for USB access."
+    echo "[!] NOTE: You must log out and log back in (or run 'newgrp plugdev') for USB device permissions to take effect."
 fi
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

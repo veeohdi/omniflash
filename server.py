@@ -48,6 +48,7 @@ app = Flask(__name__)
 TARGET_PRODUCT = "coral"  # Google Pixel 4 XL strictly. No overrides.
 ALLOWED_ANDROID_VERSIONS = {"10", "11", "12", "13"}
 MIN_BATTERY_PERCENT = 30
+MIN_FASTBOOT_VOLTAGE_MV = 3700  # Safe voltage threshold in Fastboot mode (~3.7V)
 SERVER_PORT = 8086
 SERVER_HOST = "127.0.0.1"
 
@@ -171,9 +172,12 @@ def verify_coral_adb(serial: str = None) -> tuple[bool, str]:
         device = res.stdout.strip().lower()
         if device == TARGET_PRODUCT:
             return True, device
-        # Also check ro.build.product fallback
-        cmd[3] = "ro.build.product"
-        res2 = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        # Also check ro.build.product fallback cleanly without index mutation
+        cmd_fallback = [adb_path]
+        if serial:
+            cmd_fallback.extend(["-s", serial])
+        cmd_fallback.extend(["shell", "getprop", "ro.build.product"])
+        res2 = subprocess.run(cmd_fallback, capture_output=True, text=True, timeout=5)
         device2 = res2.stdout.strip().lower()
         if device2 == TARGET_PRODUCT:
             return True, device2
@@ -203,11 +207,26 @@ def verify_coral_fastboot(serial: str = None) -> tuple[bool, str]:
 # ─────────────────────────────────────────────
 # Device State Detection Engine
 # ─────────────────────────────────────────────
-def query_device_state():
+def query_device_state(ignore_busy: bool = False):
     """
     Detect device connection across Android OS (adb), Bootloader (fastboot),
     or Fastbootd (userspace fastboot). Enforces single-device check.
+    Pauses USB querying if an active operation (flash/unlock/relock) is running.
     """
+    if not ignore_busy:
+        with operation_lock:
+            running = is_operation_running
+            op_name = current_operation_name
+        if running:
+            return {
+                "status": "busy",
+                "count": 1,
+                "mode": "busy",
+                "operation": op_name,
+                "message": f"Operation '{op_name}' in progress. USB state polling paused.",
+                "battery_safe": True
+            }
+
     adb_devices = []
     fastboot_devices = []
     
@@ -351,6 +370,16 @@ def query_device_state():
         except Exception:
             pass
 
+        # Determine battery safety in Fastboot mode
+        battery_safe = True
+        volt_digits = re.search(r'\d+', battery_voltage)
+        if volt_digits:
+            try:
+                volt_int = int(volt_digits.group())
+                battery_safe = (volt_int >= MIN_FASTBOOT_VOLTAGE_MV)
+            except ValueError:
+                pass
+
         return {
             "status": "ready",
             "count": 1,
@@ -360,7 +389,7 @@ def query_device_state():
             "bootloader_unlocked": unlocked,
             "current_slot": current_slot,
             "battery_voltage": battery_voltage,
-            "battery_safe": True
+            "battery_safe": battery_safe
         }
 
 # ─────────────────────────────────────────────
@@ -501,14 +530,20 @@ def api_inspect_image():
                     detected_build_id = parts[0].upper()
                     
             # Detect Android version from build ID prefix
-            if detected_build_id.startswith("TP1A") or detected_build_id.startswith("TQ1A") or detected_build_id.startswith("TQ2A") or detected_build_id.startswith("TQ3A"):
+            if detected_build_id.startswith(("TP1A", "TQ1A", "TQ2A", "TQ3A", "TD1A")):
                 detected_android_version = "13"
-            elif detected_build_id.startswith("SQ1A") or detected_build_id.startswith("SQ3A") or detected_build_id.startswith("SP1A") or detected_build_id.startswith("SP2A"):
+            elif detected_build_id.startswith(("SQ1A", "SQ3A", "SP1A", "SP2A", "SD1A")):
                 detected_android_version = "12"
-            elif detected_build_id.startswith("RP1A") or detected_build_id.startswith("RQ1A") or detected_build_id.startswith("RQ2A") or detected_build_id.startswith("RQ3A") or detected_build_id.startswith("RD1A"):
+            elif detected_build_id.startswith(("RP1A", "RQ1A", "RQ2A", "RQ3A", "RD1A")):
                 detected_android_version = "11"
-            elif detected_build_id.startswith("QD1A") or detected_build_id.startswith("QQ1A") or detected_build_id.startswith("QQ2A") or detected_build_id.startswith("QQ3A"):
+            elif detected_build_id.startswith(("QD1A", "QQ1A", "QQ2A", "QQ3A", "QP1A")):
                 detected_android_version = "10"
+            elif detected_build_id.startswith(("AP1A", "AP2A", "UD1A", "UP1A", "UQ1A")):
+                detected_android_version = "14"
+            elif detected_build_id.startswith(("PQ1A", "PQ2A", "PQ3A", "PD1A")):
+                detected_android_version = "9"
+            else:
+                detected_android_version = "unknown"
                 
     except zipfile.BadZipFile:
         return jsonify({"status": "error", "message": "Corrupted or invalid ZIP archive."}), 400
@@ -526,6 +561,14 @@ def api_inspect_image():
         return jsonify({
             "status": "invalid_image",
             "message": f"Invalid Google Pixel 4 XL factory image. Missing: {', '.join(missing)}",
+            "sha256": computed_sha256,
+            "filename": os.path.basename(zip_path)
+        }), 400
+
+    if detected_android_version not in ALLOWED_ANDROID_VERSIONS:
+        return jsonify({
+            "status": "invalid_image",
+            "message": f"Unsupported or unknown Android version '{detected_android_version}'. OmniFlash strictly supports Android {', '.join(sorted(ALLOWED_ANDROID_VERSIONS))}.",
             "sha256": computed_sha256,
             "filename": os.path.basename(zip_path)
         }), 400
@@ -573,7 +616,7 @@ def api_bootloader_unlock():
             broadcast_terminal("WARNING: This will wipe all user data on the device.", "warn")
             
             # 1. Check current mode and transition to bootloader if needed
-            state = query_device_state()
+            state = query_device_state(ignore_busy=True)
             if state["status"] != "ready":
                 broadcast_terminal(f"Error: {state.get('message', 'Device not ready')}", "error")
                 return
@@ -589,7 +632,7 @@ def api_bootloader_unlock():
                 found = False
                 for _ in range(30):
                     time.sleep(1.5)
-                    st = query_device_state()
+                    st = query_device_state(ignore_busy=True)
                     if st["status"] == "ready" and st["mode"] in ("fastboot", "fastbootd"):
                         found = True
                         break
@@ -643,7 +686,7 @@ def api_flash_start():
     - Typed confirmation 'FLASH'
     - Explicit checksum_verified == True
     - Single device & coral codename
-    - Battery >= 30%
+    - Battery >= 30% / >= 3700 mV in fastboot
     """
     global is_operation_running, current_operation_name
     data = request.get_json(silent=True) or {}
@@ -678,16 +721,19 @@ def api_flash_start():
             broadcast_terminal("=====================================================", "sys")
             
             # Step 1: Query & Verify Device State
-            state = query_device_state()
+            state = query_device_state(ignore_busy=True)
             if state["status"] != "ready":
                 broadcast_terminal(f"Error: {state.get('message', 'Device not ready')}", "error")
                 return
 
             serial = state["serial"]
             
-            # Battery check
+            # Battery check (Android & Fastboot modes)
             if state["mode"] == "android" and state.get("battery_level", 100) < MIN_BATTERY_PERCENT:
                 broadcast_terminal(f"HARD STOP: Battery level is {state['battery_level']}%. Minimum {MIN_BATTERY_PERCENT}% required to flash safely.", "error")
+                return
+            elif state["mode"] in ("fastboot", "fastbootd") and not state.get("battery_safe", True):
+                broadcast_terminal(f"HARD STOP: Fastboot battery voltage is {state.get('battery_voltage', 'unknown')}. Minimum {MIN_FASTBOOT_VOLTAGE_MV} mV (3.7V) required to flash safely.", "error")
                 return
 
             # Step 2: Reboot to Bootloader if in Android
@@ -700,7 +746,7 @@ def api_flash_start():
                 found = False
                 for _ in range(35):
                     time.sleep(1.5)
-                    st = query_device_state()
+                    st = query_device_state(ignore_busy=True)
                     if st["status"] == "ready" and st["mode"] in ("fastboot", "fastbootd"):
                         found = True
                         break
@@ -708,11 +754,21 @@ def api_flash_start():
                     broadcast_terminal("Timed out waiting for device to enter bootloader.", "error")
                     return
 
-            # Step 3: Verify fastboot codename & lock state
+            # Step 3: Verify fastboot codename, voltage & lock state
             is_coral, prod = verify_coral_fastboot(serial)
             if not is_coral:
                 broadcast_terminal(f"HARD STOP: Fastboot device reports product '{prod}'. Only '{TARGET_PRODUCT}' allowed.", "error")
                 return
+
+            # Verify fastboot battery voltage threshold
+            res_volt = subprocess.run([fastboot_path, "-s", serial, "getvar", "battery-voltage"], capture_output=True, text=True, timeout=5)
+            volt_out = res_volt.stderr + "\n" + res_volt.stdout
+            volt_match = re.search(r'battery-voltage:\s*(\d+)', volt_out, re.IGNORECASE)
+            if volt_match:
+                volt_mv = int(volt_match.group(1))
+                if volt_mv < MIN_FASTBOOT_VOLTAGE_MV:
+                    broadcast_terminal(f"HARD STOP: Fastboot battery voltage is {volt_mv} mV. Minimum {MIN_FASTBOOT_VOLTAGE_MV} mV (3.7V) required to flash safely.", "error")
+                    return
 
             # Check unlocked
             res_unlock = subprocess.run([fastboot_path, "-s", serial, "getvar", "unlocked"], capture_output=True, text=True, timeout=5)
@@ -759,7 +815,11 @@ def api_flash_start():
             if serial:
                 env["ANDROID_SERIAL"] = serial
                 
-            cmd = [flash_script_path]
+            if sys.platform == "win32":
+                cmd = ["cmd.exe", "/c", flash_script_path]
+            else:
+                cmd = [flash_script_path]
+
             log_to_file(logfile, f"Executing: {cmd} in cwd={script_dir}")
             
             proc = subprocess.Popen(
@@ -869,7 +929,7 @@ def api_bootloader_relock():
         global is_operation_running, current_operation_name
         try:
             broadcast_terminal(">>> Initiating Bootloader Relock...", "warn")
-            state = query_device_state()
+            state = query_device_state(ignore_busy=True)
             if state["status"] != "ready":
                 broadcast_terminal(f"Error: {state.get('message', 'Device not ready')}", "error")
                 return
@@ -884,7 +944,7 @@ def api_bootloader_relock():
                 found = False
                 for _ in range(30):
                     time.sleep(1.5)
-                    st = query_device_state()
+                    st = query_device_state(ignore_busy=True)
                     if st["status"] == "ready" and st["mode"] in ("fastboot", "fastbootd"):
                         found = True
                         break

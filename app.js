@@ -152,6 +152,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderDeviceState(data) {
+        if (data.status === 'busy') {
+            headerConnBadge.className = 'badge badge-warn';
+            headerConnBadge.textContent = `${(data.operation || 'Operation').replace(/_/g, ' ').toUpperCase()} IN PROGRESS`;
+            return;
+        }
+
         if (data.status === 'disconnected') {
             headerConnBadge.className = 'badge badge-disconnected';
             headerConnBadge.textContent = 'Device: Disconnected';
@@ -161,6 +167,7 @@ document.addEventListener('DOMContentLoaded', () => {
             devBootloader.textContent = '—';
             devBuild.textContent = '—';
             devBattery.textContent = '—';
+            devBattery.style.color = 'inherit';
             unlockPrompt.classList.add('hidden');
             return;
         }
@@ -204,6 +211,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (data.mode === 'android') {
             devBuild.textContent = `Android ${data.android_version} (${data.build_id})`;
             devBattery.textContent = data.battery_level >= 0 ? `${data.battery_level}%` : 'Unknown';
+            devBattery.style.color = data.battery_safe ? 'inherit' : 'var(--accent-coral)';
             if (data.bootloader_locked === true) {
                 devBootloader.textContent = 'LOCKED';
                 devBootloader.style.color = 'var(--accent-amber)';
@@ -219,7 +227,14 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             // Fastboot / Fastbootd
             devBuild.textContent = 'Bootloader Fastboot';
-            devBattery.textContent = data.battery_voltage ? `${data.battery_voltage} mV` : 'Fastboot Connected';
+            if (data.battery_voltage) {
+                const vText = data.battery_voltage.includes('mV') ? data.battery_voltage : `${data.battery_voltage} mV`;
+                devBattery.textContent = data.battery_safe ? vText : `${vText} (LOW BATTERY)`;
+                devBattery.style.color = data.battery_safe ? 'inherit' : 'var(--accent-coral)';
+            } else {
+                devBattery.textContent = 'Fastboot Connected';
+                devBattery.style.color = 'inherit';
+            }
             if (data.bootloader_unlocked === false) {
                 devBootloader.textContent = 'LOCKED';
                 devBootloader.style.color = 'var(--accent-amber)';
