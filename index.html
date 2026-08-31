@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OmniFlash — Pixel 4 XL (coral) Flasher</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=3">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
 </head>
 <body class="theme-dark">
@@ -156,10 +156,6 @@
                                 <div class="verify-source-link">
                                     Official source: <a href="https://developers.google.com/android/images#coral" target="_blank" rel="noopener">Google Pixel Factory Images Page (coral)</a>
                                 </div>
-                                <label class="checkbox-container" for="chk-verify-hash">
-                                    <input type="checkbox" id="chk-verify-hash">
-                                    <span><strong>I have cross-checked this SHA-256 checksum against Google's published hash.</strong></span>
-                                </label>
                             </div>
                         </div>
                     </div>
@@ -175,6 +171,12 @@
                     </div>
                     <div class="card-body">
                         <p class="help-text">Runs Google's official <code>flash-all</code> sequence directly against your Pixel 4 XL.</p>
+                        <div class="checksum-verify-banner" style="margin-bottom: 14px;">
+                            <label class="checkbox-container" for="chk-verify-hash">
+                                <input type="checkbox" id="chk-verify-hash">
+                                <span><strong>I confirm the SHA-256 checksum matches Google's official hash.</strong></span>
+                            </label>
+                        </div>
                         <button id="btn-start-flash" class="btn btn-danger btn-block btn-lg" disabled>
                             Flash Factory Image (Type 'FLASH')
                         </button>
@@ -224,6 +226,6 @@
         </main>
     </div>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=3"></script>
 </body>
 </html>
