@@ -400,6 +400,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 const data = await res.json();
 
+                if (data.failed) {
+                    clearInterval(verifyInterval);
+                    verifyInterval = null;
+                    isFlashing = false;
+                    verifyMsg.innerHTML = `<span style="color: #ef4444">${data.message}</span>`;
+                    updateFlashButtonState();
+                    logToTerminal(`[FAILED] ${data.message}`, 'error');
+                    return;
+                }
+
                 if (data.completed && data.verified) {
                     clearInterval(verifyInterval);
                     verifyInterval = null;

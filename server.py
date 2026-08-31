@@ -95,6 +95,7 @@ def get_tools_dir():
 operation_lock = threading.Lock()
 is_operation_running = False
 current_operation_name = ""
+last_flash_result = {"completed": False, "success": False, "error": None}
 
 terminal_subscribers = []
 terminal_subscribers_lock = threading.Lock()
@@ -784,8 +785,10 @@ def api_flash_start():
                 return
 
             # Step 4: Extract Google Factory Image Zip
-            temp_extract_dir = tempfile.mkdtemp(prefix="omniflash_coral_")
-            broadcast_terminal(f"Extracting factory image to temporary workspace...", "sys")
+            workspaces_base = os.path.join(BASE_DIR, "workspaces")
+            os.makedirs(workspaces_base, exist_ok=True)
+            temp_extract_dir = tempfile.mkdtemp(prefix="coral_flash_", dir=workspaces_base)
+            broadcast_terminal(f"Extracting factory image to disk workspace ({workspaces_base})...", "sys")
             log_to_file(logfile, f"Workspace: {temp_extract_dir}")
             
             with zipfile.ZipFile(zip_path, "r") as zf:
@@ -803,6 +806,7 @@ def api_flash_start():
             flash_script_path = os.path.join(script_dir, flash_script_name)
             if not os.path.exists(flash_script_path):
                 broadcast_terminal(f"Error: {flash_script_name} not found inside extracted archive.", "error")
+                last_flash_result = {"completed": True, "success": False, "error": f"{flash_script_name} missing"}
                 return
 
             if sys.platform != "win32":
@@ -814,10 +818,13 @@ def api_flash_start():
             broadcast_terminal("DO NOT DISCONNECT OR TOUCH THE DEVICE UNTIL COMPLETE!", "warn")
             broadcast_terminal("=====================================================\n", "sys")
             
-            # Prepare environment with platform-tools at head of PATH
+            # Prepare environment with platform-tools at head of PATH and TMPDIR set to workspace disk
             tools_dir = get_tools_dir()
             env = os.environ.copy()
             env["PATH"] = f"{tools_dir}{os.pathsep}{env.get('PATH', '')}"
+            env["TMPDIR"] = temp_extract_dir
+            env["TEMP"] = temp_extract_dir
+            env["TMP"] = temp_extract_dir
             if serial:
                 env["ANDROID_SERIAL"] = serial
                 
@@ -849,9 +856,11 @@ def api_flash_start():
             log_to_file(logfile, f"flash-all process exit code: {exit_code}")
 
             if exit_code != 0:
+                last_flash_result = {"completed": True, "success": False, "error": f"flash-all exited with code {exit_code}"}
                 broadcast_terminal(f"\n[!] FLASH FAILED with exit code {exit_code}.", "error")
                 broadcast_terminal(f"    Check session log for details: {logfile}", "error")
             else:
+                last_flash_result = {"completed": True, "success": True, "error": None}
                 broadcast_terminal("\n=====================================================", "success")
                 broadcast_terminal("FLASH-ALL SCRIPT COMPLETED SUCCESSFULLY!", "success")
                 broadcast_terminal("The device is now rebooting into Android for its first boot.", "success")
@@ -859,6 +868,7 @@ def api_flash_start():
                 broadcast_terminal("=====================================================\n", "success")
 
         except Exception as e:
+            last_flash_result = {"completed": True, "success": False, "error": str(e)}
             broadcast_terminal(f"\nException during flash execution: {e}", "error")
             log_to_file(logfile, f"Exception: {e}")
         finally:
@@ -881,9 +891,17 @@ def api_flash_verify():
     Post-flash verification:
     Polls until sys.boot_completed == 1 and verifies ro.build.version.release.
     """
+    global last_flash_result
     data = request.get_json(silent=True) or {}
     expected_version = (data.get("expected_version") or "").strip()
     
+    if last_flash_result.get("completed") and not last_flash_result.get("success"):
+        return jsonify({
+            "completed": False,
+            "failed": True,
+            "message": f"Flashing failed: {last_flash_result.get('error')}. Check console log."
+        })
+
     state = query_device_state()
     if state["status"] != "ready":
         return jsonify({"completed": False, "message": "Waiting for device to boot into Android..."})
