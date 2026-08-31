@@ -17,6 +17,7 @@ import tempfile
 import threading
 import queue
 import re
+import json
 from datetime import datetime
 
 # ─────────────────────────────────────────────
@@ -462,12 +463,15 @@ def stream_terminal():
         with terminal_subscribers_lock:
             terminal_subscribers.append(q)
         try:
+            # Immediate connection acknowledgement
+            init_msg = json.dumps({"text": "[SYSTEM] Live terminal stream connected.", "type": "sys", "time": datetime.now().strftime("%H:%M:%S")})
+            yield f"data: {init_msg}\n\n"
             while True:
                 try:
-                    item = q.get(timeout=25.0)
+                    item = q.get(timeout=20.0)
                     if item is None:
                         break
-                    yield f"data: {jsonify(item).get_data(as_text=True)}\n\n"
+                    yield f"data: {json.dumps(item)}\n\n"
                 except queue.Empty:
                     # Keepalive ping
                     yield ": keepalive\n\n"
@@ -476,7 +480,11 @@ def stream_terminal():
                 if q in terminal_subscribers:
                     terminal_subscribers.remove(q)
 
-    return Response(event_stream(), mimetype="text/event-stream")
+    response = Response(event_stream(), mimetype="text/event-stream")
+    response.headers["Cache-Control"] = "no-cache"
+    response.headers["X-Accel-Buffering"] = "no"
+    response.headers["Connection"] = "keep-alive"
+    return response
 
 @app.route('/api/device/state', methods=['GET'])
 def api_device_state():
@@ -1039,6 +1047,181 @@ def api_flash_verify():
         return jsonify({"completed": False, "message": str(e)})
 
     return jsonify({"completed": False, "message": "System starting up..."})
+
+@app.route('/api/apk/scan', methods=['POST'])
+def api_apk_scan():
+    """
+    Scan a directory or file path for installable Android packages (.apk, .apks, .apkm, .xapk).
+    """
+    data = request.get_json(silent=True) or {}
+    raw_path = (data.get("path") or "").strip()
+    
+    if not raw_path:
+        return jsonify({"status": "error", "message": "File or folder path is required."}), 400
+        
+    resolved_path = os.path.abspath(os.path.expanduser(raw_path))
+    if not os.path.exists(resolved_path):
+        return jsonify({"status": "error", "message": f"Path does not exist: {resolved_path}"}), 404
+
+    allowed_exts = {".apk", ".apks", ".apkm", ".xapk"}
+    items = []
+
+    if os.path.isfile(resolved_path):
+        ext = os.path.splitext(resolved_path)[1].lower()
+        if ext in allowed_exts:
+            size_mb = round(os.path.getsize(resolved_path) / (1024 * 1024), 2)
+            items.append({
+                "filename": os.path.basename(resolved_path),
+                "file_path": resolved_path,
+                "size_mb": size_mb,
+                "type": "bundle" if ext in {".apks", ".apkm", ".xapk"} else "single_apk"
+            })
+        else:
+            return jsonify({"status": "error", "message": f"Unsupported file type '{ext}'. Supported: .apk, .apks, .apkm, .xapk"}), 400
+    elif os.path.isdir(resolved_path):
+        for root, _, files in os.walk(resolved_path):
+            for f in sorted(files):
+                ext = os.path.splitext(f)[1].lower()
+                if ext in allowed_exts:
+                    full_p = os.path.join(root, f)
+                    size_mb = round(os.path.getsize(full_p) / (1024 * 1024), 2)
+                    items.append({
+                        "filename": f,
+                        "file_path": full_p,
+                        "size_mb": size_mb,
+                        "type": "bundle" if ext in {".apks", ".apkm", ".xapk"} else "single_apk"
+                    })
+
+    if not items:
+        return jsonify({"status": "error", "message": f"No .apk, .apks, .apkm, or .xapk files found in: {resolved_path}"}), 404
+
+    return jsonify({
+        "status": "ok",
+        "count": len(items),
+        "target_path": resolved_path,
+        "items": items
+    })
+
+@app.route('/api/apk/install', methods=['POST'])
+def api_apk_install():
+    """
+    Batch install list of APKs and Split APK bundles to connected Pixel 4 XL.
+    """
+    global is_operation_running, current_operation_name
+    data = request.get_json(silent=True) or {}
+    file_paths = data.get("files") or []
+
+    if not file_paths:
+        return jsonify({"status": "error", "message": "No APK files provided for installation."}), 400
+
+    # Ensure device is connected in Android mode
+    state = query_device_state(ignore_busy=True)
+    if state["status"] != "ready" or state["mode"] != "android":
+        return jsonify({
+            "status": "error",
+            "message": f"Device must be booted in Android mode with USB Debugging enabled (Current state: {state['status']}, mode: {state.get('mode', 'unknown')})."
+        }), 400
+
+    with operation_lock:
+        if is_operation_running:
+            return jsonify({"status": "busy", "message": f"Operation '{current_operation_name}' is in progress."}), 409
+        is_operation_running = True
+        current_operation_name = "batch_apk_install"
+
+    logfile = get_session_logfile("apk_install")
+    log_to_file(logfile, "=== Starting Batch APK Installation Session ===")
+
+    def install_worker():
+        global is_operation_running, current_operation_name
+        try:
+            serial = state["serial"]
+            broadcast_terminal("\n=====================================================", "sys")
+            broadcast_terminal(f"STARTING BATCH APK INSTALLATION ({len(file_paths)} packages)", "sys")
+            broadcast_terminal(f"Target Device: Pixel 4 XL ({serial})", "sys")
+            broadcast_terminal("=====================================================\n", "sys")
+
+            success_count = 0
+            fail_count = 0
+
+            for idx, fpath in enumerate(file_paths, 1):
+                if not os.path.exists(fpath):
+                    broadcast_terminal(f"[{idx}/{len(file_paths)}] File not found: {fpath}", "error")
+                    fail_count += 1
+                    continue
+
+                fname = os.path.basename(fpath)
+                ext = os.path.splitext(fname)[1].lower()
+                broadcast_terminal(f"[{idx}/{len(file_paths)}] Installing: {fname}...", "sys")
+                log_to_file(logfile, f"Installing [{idx}/{len(file_paths)}]: {fpath}")
+
+                if ext == ".apk":
+                    # Single APK install
+                    cmd = [adb_path, "-s", serial, "install", "-r", "-d", fpath]
+                    res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                    out = (res.stdout + "\n" + res.stderr).strip()
+                    log_to_file(logfile, out)
+                    if res.returncode == 0 and "Success" in out:
+                        broadcast_terminal(f"  Result: SUCCESS", "success")
+                        success_count += 1
+                    else:
+                        broadcast_terminal(f"  Result: FAILED - {out}", "error")
+                        fail_count += 1
+
+                elif ext in {".apks", ".apkm", ".xapk"}:
+                    # Split APK bundle install
+                    workspaces_base = os.path.join(BASE_DIR, "workspaces")
+                    os.makedirs(workspaces_base, exist_ok=True)
+                    temp_bundle_dir = tempfile.mkdtemp(prefix="apk_bundle_", dir=workspaces_base)
+                    try:
+                        with zipfile.ZipFile(fpath, 'r') as bz:
+                            bz.extractall(temp_bundle_dir)
+
+                        extracted_apks = []
+                        for root, _, bfiles in os.walk(temp_bundle_dir):
+                            for bf in bfiles:
+                                if bf.endswith(".apk"):
+                                    extracted_apks.append(os.path.join(root, bf))
+
+                        if not extracted_apks:
+                            broadcast_terminal("  Result: FAILED (No .apk files found inside bundle)", "error")
+                            fail_count += 1
+                        else:
+                            broadcast_terminal(f"  Extracted {len(extracted_apks)} split chunks. Sideloading via install-multiple...", "sys")
+                            cmd = [adb_path, "-s", serial, "install-multiple", "-r", "-d"] + extracted_apks
+                            res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+                            out = (res.stdout + "\n" + res.stderr).strip()
+                            log_to_file(logfile, out)
+                            if res.returncode == 0 and "Success" in out:
+                                broadcast_terminal("  Result: SUCCESS", "success")
+                                success_count += 1
+                            else:
+                                broadcast_terminal(f"  Result: FAILED - {out}", "error")
+                                fail_count += 1
+                    except Exception as b_err:
+                        broadcast_terminal(f"  Result: FAILED - Bundle extract error: {b_err}", "error")
+                        fail_count += 1
+                    finally:
+                        if os.path.exists(temp_bundle_dir):
+                            try:
+                                shutil.rmtree(temp_bundle_dir)
+                            except Exception:
+                                pass
+
+            broadcast_terminal("\n=====================================================", "sys")
+            broadcast_terminal(f"BATCH APK INSTALLATION COMPLETE: {success_count} Succeeded, {fail_count} Failed", "success" if fail_count == 0 else "warn")
+            broadcast_terminal(f"Session Log: {logfile}", "sys")
+            broadcast_terminal("=====================================================\n", "sys")
+
+        except Exception as e:
+            broadcast_terminal(f"\nException during batch APK installation: {e}", "error")
+            log_to_file(logfile, f"Exception: {e}")
+        finally:
+            with operation_lock:
+                is_operation_running = False
+                current_operation_name = ""
+
+    threading.Thread(target=install_worker, daemon=True).start()
+    return jsonify({"status": "started", "message": "Batch APK installation initiated."})
 
 @app.route('/api/bootloader/relock', methods=['POST'])
 def api_bootloader_relock():

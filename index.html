@@ -203,6 +203,41 @@
                     </div>
                 </section>
 
+                <!-- Card 5: Batch APK & App Bundle Sideloading -->
+                <section id="card-apk" class="card glass">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <span class="step-num">5</span>
+                            <h3>Batch APK &amp; App Bundle Installer</h3>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="help-text">Sideload updated APKs and Split APK bundles (<code>.apk</code>, <code>.apks</code>, <code>.apkm</code>, <code>.xapk</code>) directly to your Pixel 4 XL over USB via ADB without Play Store waiting:</p>
+                        
+                        <div class="input-row">
+                            <input type="text" id="apk-path-input" class="form-input font-mono" placeholder="/path/to/apk_folder or single.apk">
+                            <button id="btn-scan-apks" class="btn btn-primary">Scan APKs</button>
+                        </div>
+
+                        <!-- Discovered APKs Box -->
+                        <div id="apk-details-box" class="apk-details-box hidden">
+                            <div class="apk-box-header">
+                                <span class="detail-label font-bold">Discovered Packages: <span id="apk-count-badge" class="badge badge-cyan">0</span></span>
+                                <button id="btn-toggle-all-apks" class="btn btn-xs btn-outline">Select All</button>
+                            </div>
+                            <div id="apk-items-list" class="apk-items-list"></div>
+                        </div>
+
+                        <div id="apk-mode-warning" class="help-text text-warning hidden" style="margin-top: 10px;">
+                            Device must be booted in Android mode with USB Debugging enabled to install APKs.
+                        </div>
+
+                        <button id="btn-install-apks" class="btn btn-success btn-block btn-lg" style="margin-top: 14px;" disabled>
+                            Install Selected Packages Over ADB
+                        </button>
+                    </div>
+                </section>
+
             </div>
 
             <!-- Right Terminal Column -->

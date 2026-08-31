@@ -54,6 +54,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const relockContainer = $('relock-container');
     const btnRelock = $('btn-relock');
 
+    // ── Batch APK Installer Elements ─────────────
+    const apkPathInput = $('apk-path-input');
+    const btnScanApks = $('btn-scan-apks');
+    const apkDetailsBox = $('apk-details-box');
+    const apkCountBadge = $('apk-count-badge');
+    const btnToggleAllApks = $('btn-toggle-all-apks');
+    const apkItemsList = $('apk-items-list');
+    const apkModeWarning = $('apk-mode-warning');
+    const btnInstallApks = $('btn-install-apks');
+    let discoveredApks = [];
+    let isInstallingApks = false;
+
     const terminalOutput = $('terminal-output');
     const btnClearTerm = $('btn-clear-term');
 
@@ -146,6 +158,7 @@ document.addEventListener('DOMContentLoaded', () => {
             deviceState = data;
             renderDeviceState(data);
             updateFlashButtonState();
+            updateApkInstallButtonState();
         } catch (e) {
             // Transient error
         }
@@ -445,6 +458,149 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }, 2000);
     }
+
+    // ── Batch APK Installer Logic ───────────────
+    function updateApkInstallButtonState() {
+        if (isFlashing || isInstallingApks) {
+            btnInstallApks.disabled = true;
+            return;
+        }
+
+        const isAndroidMode = deviceState && deviceState.status === 'ready' && deviceState.mode === 'android';
+        if (!isAndroidMode) {
+            apkModeWarning.classList.remove('hidden');
+            btnInstallApks.disabled = true;
+            return;
+        }
+
+        apkModeWarning.classList.add('hidden');
+        const checkedCount = document.querySelectorAll('.chk-apk-item:checked').length;
+        btnInstallApks.disabled = (checkedCount === 0);
+        btnInstallApks.textContent = checkedCount > 0 
+            ? `Install ${checkedCount} Selected Package${checkedCount > 1 ? 's' : ''} Over ADB`
+            : 'Select Packages to Install';
+    }
+
+    btnScanApks.addEventListener('click', async () => {
+        const pathVal = apkPathInput.value.trim();
+        if (!pathVal) {
+            alert('Please specify a directory or APK file path.');
+            return;
+        }
+
+        btnScanApks.disabled = true;
+        btnScanApks.textContent = 'Scanning...';
+        logToTerminal(`[SCAN] Searching for installable APKs in: ${pathVal}...`, 'sys');
+
+        try {
+            const res = await fetch('/api/apk/scan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: pathVal })
+            });
+            const data = await res.json();
+
+            if (data.status !== 'ok') {
+                alert(`Scan Error: ${data.message}`);
+                apkDetailsBox.classList.add('hidden');
+                discoveredApks = [];
+                updateApkInstallButtonState();
+                logToTerminal(`[SCAN] ${data.message}`, 'error');
+                return;
+            }
+
+            discoveredApks = data.items;
+            apkCountBadge.textContent = data.count;
+            apkItemsList.innerHTML = '';
+
+            data.items.forEach((item, index) => {
+                const row = document.createElement('div');
+                row.className = 'apk-item-row';
+                row.innerHTML = `
+                    <div class="apk-item-left">
+                        <input type="checkbox" class="chk-apk-item" id="apk-chk-${index}" data-path="${item.file_path}" checked>
+                        <div class="apk-item-info">
+                            <label for="apk-chk-${index}" class="apk-item-name" title="${item.filename}">${item.filename}</label>
+                            <span class="apk-item-meta font-mono">${item.size_mb} MB &bull; ${item.type === 'bundle' ? 'Split Bundle (.apkm/.apks)' : 'Single APK'}</span>
+                        </div>
+                    </div>
+                    <div class="apk-item-right">
+                        <span class="badge ${item.type === 'bundle' ? 'badge-yellow' : 'badge-cyan'}">${item.type === 'bundle' ? 'BUNDLE' : 'APK'}</span>
+                    </div>
+                `;
+                apkItemsList.appendChild(row);
+            });
+
+            apkDetailsBox.classList.remove('hidden');
+            logToTerminal(`[SCAN] Discovered ${data.count} package(s) ready to install.`, 'success');
+
+            // Wire up checkbox change listeners
+            document.querySelectorAll('.chk-apk-item').forEach(chk => {
+                chk.addEventListener('change', updateApkInstallButtonState);
+            });
+
+            updateApkInstallButtonState();
+
+        } catch (e) {
+            alert(`Error: ${e.message}`);
+            logToTerminal(`[SCAN] Exception: ${e.message}`, 'error');
+        } finally {
+            btnScanApks.disabled = false;
+            btnScanApks.textContent = 'Scan APKs';
+        }
+    });
+
+    btnToggleAllApks.addEventListener('click', () => {
+        const checkboxes = document.querySelectorAll('.chk-apk-item');
+        if (checkboxes.length === 0) return;
+        const anyUnchecked = Array.from(checkboxes).some(c => !c.checked);
+        checkboxes.forEach(c => c.checked = anyUnchecked);
+        btnToggleAllApks.textContent = anyUnchecked ? 'Deselect All' : 'Select All';
+        updateApkInstallButtonState();
+    });
+
+    btnInstallApks.addEventListener('click', async () => {
+        const selectedPaths = Array.from(document.querySelectorAll('.chk-apk-item:checked')).map(c => c.dataset.path);
+        if (selectedPaths.length === 0) return;
+
+        if (!deviceState || deviceState.status !== 'ready' || deviceState.mode !== 'android') {
+            alert('Device must be booted in Android mode with USB Debugging enabled.');
+            return;
+        }
+
+        isInstallingApks = true;
+        updateApkInstallButtonState();
+
+        try {
+            const res = await fetch('/api/apk/install', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ files: selectedPaths })
+            });
+            const data = await res.json();
+            if (data.status !== 'started') {
+                alert(`Install Error: ${data.message}`);
+                isInstallingApks = false;
+                updateApkInstallButtonState();
+            } else {
+                // Poll until operation finishes
+                const checkInterval = setInterval(async () => {
+                    try {
+                        const st = await (await fetch('/api/device/state')).json();
+                        if (st.status !== 'busy') {
+                            clearInterval(checkInterval);
+                            isInstallingApks = false;
+                            updateApkInstallButtonState();
+                        }
+                    } catch (e) {}
+                }, 1500);
+            }
+        } catch (e) {
+            alert(`Error: ${e.message}`);
+            isInstallingApks = false;
+            updateApkInstallButtonState();
+        }
+    });
 
     // ── Relock Bootloader Trigger ────────────────
     btnRelock.addEventListener('click', () => {
