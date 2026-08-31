@@ -51,6 +51,7 @@ MIN_BATTERY_PERCENT = 30
 MIN_FASTBOOT_VOLTAGE_MV = 3700  # Safe voltage threshold in Fastboot mode (~3.7V)
 SERVER_PORT = 8086
 SERVER_HOST = "127.0.0.1"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ─────────────────────────────────────────────
 # Binary Resolver (Bundled Platform-Tools)
