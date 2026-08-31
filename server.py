@@ -257,7 +257,7 @@ def query_device_state(ignore_busy: bool = False):
         res_fb = subprocess.run([fastboot_path, "devices"], capture_output=True, text=True, timeout=4)
         for line in res_fb.splitlines() if isinstance(res_fb, list) else res_fb.stdout.splitlines():
             parts = line.strip().split()
-            if len(parts) >= 2 and parts[1] == "fastboot":
+            if len(parts) >= 2 and parts[1] in ("fastboot", "fastbootd"):
                 serial = parts[0]
                 fastboot_devices.append({"serial": serial, "mode": "fastboot"})
     except Exception:
@@ -810,23 +810,92 @@ def api_flash_start():
                 last_flash_result = {"completed": True, "success": False, "error": f"{flash_script_name} missing"}
                 return
 
-            # Ensure fastboot splits partition images into safe 512M chunks for USB controllers
-            try:
-                with open(flash_script_path, "r", encoding="utf-8", errors="ignore") as sf:
-                    script_content = sf.read()
-                if "-S 512M" not in script_content:
-                    script_content = re.sub(r'fastboot\s+(-w\s+)?update', r'fastboot -S 512M \1update', script_content)
-                    with open(flash_script_path, "w", encoding="utf-8") as sf:
-                        sf.write(script_content)
-            except Exception:
-                pass
+            # Pre-extract nested firmware images to avoid on-the-fly USB decompression timeouts
+            for f in os.listdir(script_dir):
+                if f.startswith("image-coral-") and f.endswith(".zip"):
+                    nested_zip_path = os.path.join(script_dir, f)
+                    broadcast_terminal(f"Pre-extracting firmware partitions ({f})...", "sys")
+                    log_to_file(logfile, f"Pre-extracting {f} into {script_dir}")
+                    try:
+                        with zipfile.ZipFile(nested_zip_path, 'r') as nz:
+                            nz.extractall(script_dir)
+                        broadcast_terminal("Firmware partitions pre-extracted successfully.", "sys")
+                    except Exception as ze:
+                        log_to_file(logfile, f"Warning pre-extracting nested zip: {ze}")
+                    break
 
-            if sys.platform != "win32":
-                os.chmod(flash_script_path, 0o755)
+            # Find bootloader and radio image names
+            bootloader_img = None
+            radio_img = None
+            for f in os.listdir(script_dir):
+                if f.startswith("bootloader-coral-") and f.endswith(".img"):
+                    bootloader_img = f
+                elif f.startswith("radio-coral-") and f.endswith(".img"):
+                    radio_img = f
+
+            # Generate robust flash execution script
+            if sys.platform == "win32":
+                custom_script_path = os.path.join(script_dir, "omniflash_run.bat")
+                lines = [
+                    "@echo off",
+                    f"fastboot flash bootloader {bootloader_img}" if bootloader_img else "rem no bootloader",
+                    "fastboot reboot-bootloader",
+                    "timeout /t 5 /nobreak >nul",
+                    f"fastboot flash radio {radio_img}" if radio_img else "rem no radio",
+                    "fastboot reboot-bootloader",
+                    "timeout /t 5 /nobreak >nul",
+                    "if exist boot.img fastboot flash boot boot.img",
+                    "if exist dtbo.img fastboot flash dtbo dtbo.img",
+                    "if exist vbmeta.img fastboot flash vbmeta vbmeta.img",
+                    "if exist vbmeta_system.img fastboot flash vbmeta_system vbmeta_system.img",
+                    "fastboot reboot fastboot",
+                    "timeout /t 5 /nobreak >nul",
+                    "if exist product.img fastboot flash product product.img",
+                    "if exist system.img fastboot flash system system.img",
+                    "if exist system_ext.img fastboot flash system_ext system_ext.img",
+                    "if exist system_other.img fastboot flash system_other system_other.img",
+                    "if exist vendor.img fastboot flash vendor vendor.img",
+                    "fastboot -w erase userdata",
+                    "fastboot erase metadata",
+                    "fastboot reboot"
+                ]
+                with open(custom_script_path, "w", encoding="utf-8") as csf:
+                    csf.write("\r\n".join(lines) + "\r\n")
+                flash_script_path = custom_script_path
+            else:
+                custom_script_path = os.path.join(script_dir, "omniflash_run.sh")
+                lines = [
+                    "#!/bin/sh",
+                    "set -e",
+                    f"fastboot flash bootloader {bootloader_img}" if bootloader_img else "# no bootloader",
+                    "fastboot reboot-bootloader",
+                    "sleep 5",
+                    f"fastboot flash radio {radio_img}" if radio_img else "# no radio",
+                    "fastboot reboot-bootloader",
+                    "sleep 5",
+                    "[ -f boot.img ] && fastboot flash boot boot.img",
+                    "[ -f dtbo.img ] && fastboot flash dtbo dtbo.img",
+                    "[ -f vbmeta.img ] && fastboot flash vbmeta vbmeta.img",
+                    "[ -f vbmeta_system.img ] && fastboot flash vbmeta_system vbmeta_system.img",
+                    "fastboot reboot fastboot",
+                    "sleep 5",
+                    "[ -f product.img ] && fastboot flash product product.img",
+                    "[ -f system.img ] && fastboot flash system system.img",
+                    "[ -f system_ext.img ] && fastboot flash system_ext system_ext.img",
+                    "[ -f system_other.img ] && fastboot flash system_other system_other.img",
+                    "[ -f vendor.img ] && fastboot flash vendor vendor.img",
+                    "fastboot -w erase userdata || fastboot erase userdata",
+                    "fastboot erase metadata || true",
+                    "fastboot reboot"
+                ]
+                with open(custom_script_path, "w", encoding="utf-8") as csf:
+                    csf.write("\n".join(lines) + "\n")
+                os.chmod(custom_script_path, 0o755)
+                flash_script_path = custom_script_path
 
             # Step 5: Execute Google's official flash-all script
             broadcast_terminal("\n=====================================================", "sys")
-            broadcast_terminal("EXECUTING GOOGLE OFFICIAL FLASH SCRIPT", "sys")
+            broadcast_terminal("EXECUTING DIRECT HIGH-SPEED FLASH SEQUENCE", "sys")
             broadcast_terminal("DO NOT DISCONNECT OR TOUCH THE DEVICE UNTIL COMPLETE!", "warn")
             broadcast_terminal("=====================================================\n", "sys")
             
