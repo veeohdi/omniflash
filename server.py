@@ -349,7 +349,7 @@ def query_device_state(ignore_busy: bool = False):
             "android_version": build_ver,
             "build_id": build_id,
             "battery_level": battery_level,
-            "battery_safe": battery_level >= MIN_BATTERY_PERCENT if battery_level >= 0 else True,
+            "battery_safe": (battery_level >= MIN_BATTERY_PERCENT) if battery_level >= 0 else False,
             "bootloader_locked": is_locked
         }
 
@@ -391,8 +391,8 @@ def query_device_state(ignore_busy: bool = False):
         except Exception:
             pass
 
-        # Determine battery safety in Fastboot mode
-        battery_safe = True
+        # Determine battery safety in Fastboot mode (fail-closed: False if voltage unreadable)
+        battery_safe = False
         volt_digits = re.search(r'\d+', battery_voltage)
         if volt_digits:
             try:
@@ -759,11 +759,13 @@ def api_flash_start():
 
             serial = state["serial"]
             
-            # Battery check (Android & Fastboot modes)
-            if state["mode"] == "android" and state.get("battery_level", 100) < MIN_BATTERY_PERCENT:
-                broadcast_terminal(f"HARD STOP: Battery level is {state['battery_level']}%. Minimum {MIN_BATTERY_PERCENT}% required to flash safely.", "error")
+            # Battery check (Android & Fastboot modes - fail closed)
+            if state["mode"] == "android" and state.get("battery_level", -1) < MIN_BATTERY_PERCENT:
+                b_lvl = state.get("battery_level", -1)
+                b_str = f"{b_lvl}%" if b_lvl >= 0 else "unknown"
+                broadcast_terminal(f"HARD STOP: Battery level is {b_str}. Minimum {MIN_BATTERY_PERCENT}% required to flash safely.", "error")
                 return
-            elif state["mode"] in ("fastboot", "fastbootd") and not state.get("battery_safe", True):
+            elif state["mode"] in ("fastboot", "fastbootd") and not state.get("battery_safe", False):
                 broadcast_terminal(f"HARD STOP: Fastboot battery voltage is {state.get('battery_voltage', 'unknown')}. Minimum {MIN_FASTBOOT_VOLTAGE_MV} mV (3.7V) required to flash safely.", "error")
                 return
 
@@ -791,7 +793,7 @@ def api_flash_start():
                 broadcast_terminal(f"HARD STOP: Fastboot device reports product '{prod}'. Only '{TARGET_PRODUCT}' allowed.", "error")
                 return
 
-            # Verify fastboot battery voltage threshold
+            # Verify fastboot battery voltage threshold (fail closed)
             res_volt = subprocess.run([fastboot_path, "-s", serial, "getvar", "battery-voltage"], capture_output=True, text=True, timeout=5)
             volt_out = res_volt.stderr + "\n" + res_volt.stdout
             volt_match = re.search(r'battery-voltage:\s*(\d+)', volt_out, re.IGNORECASE)
@@ -800,6 +802,9 @@ def api_flash_start():
                 if volt_mv < MIN_FASTBOOT_VOLTAGE_MV:
                     broadcast_terminal(f"HARD STOP: Fastboot battery voltage is {volt_mv} mV. Minimum {MIN_FASTBOOT_VOLTAGE_MV} mV (3.7V) required to flash safely.", "error")
                     return
+            else:
+                broadcast_terminal("HARD STOP: Could not verify fastboot battery voltage. Minimum 3700 mV required to flash safely.", "error")
+                return
 
             # Check unlocked
             res_unlock = subprocess.run([fastboot_path, "-s", serial, "getvar", "unlocked"], capture_output=True, text=True, timeout=5)
@@ -839,105 +844,13 @@ def api_flash_start():
                 last_flash_result = {"completed": True, "success": False, "error": f"{flash_script_name} missing"}
                 return
 
-            # CRITICAL FIX 2 (Pre-Extraction vs On-The-Fly USB Decompression):
-            # Google's stock 'fastboot update image.zip' extracts partition images sequentially over USB.
-            # For Android 12/13, product.img is 2.5 GB. Decompressing it on-the-fly takes 45-55 seconds of 0% USB traffic,
-            # triggering Linux USB autosuspend / endpoint timeouts ('submit_urb(0) failed: No such device').
-            # By pre-extracting all nested .img files on disk BEFORE launching fastboot, each partition transfer
-            # starts with 0 seconds latency and continuous USB transmission.
-            for f in os.listdir(script_dir):
-                if f.startswith("image-coral-") and f.endswith(".zip"):
-                    nested_zip_path = os.path.join(script_dir, f)
-                    broadcast_terminal(f"Pre-extracting firmware partitions ({f})...", "sys")
-                    log_to_file(logfile, f"Pre-extracting {f} into {script_dir}")
-                    try:
-                        with zipfile.ZipFile(nested_zip_path, 'r') as nz:
-                            nz.extractall(script_dir)
-                        broadcast_terminal("Firmware partitions pre-extracted successfully.", "sys")
-                    except Exception as ze:
-                        log_to_file(logfile, f"Warning pre-extracting nested zip: {ze}")
-                    break
+            # Ensure Google's script is executable (some zip extractors strip permissions)
+            if sys.platform != "win32":
+                os.chmod(flash_script_path, 0o755)
 
-            # Find bootloader and radio image names
-            bootloader_img = None
-            radio_img = None
-            for f in os.listdir(script_dir):
-                if f.startswith("bootloader-coral-") and f.endswith(".img"):
-                    bootloader_img = f
-                elif f.startswith("radio-coral-") and f.endswith(".img"):
-                    radio_img = f
-
-            # CRITICAL FIX 3 (Deterministic Direct Flash Script vs fastboot update):
-            # Google's factory scripts invoke 'fastboot -w update image.zip'. In fastbootd mode,
-            # this can trigger fixed 512M sparse mismatches or try to flash 'system_other' directly.
-            # We generate a direct execution script (omniflash_run.sh / omniflash_run.bat) that:
-            #   1. Flashes bootloader & radio with non-fatal fallbacks in case the device starts from fastbootd.
-            #   2. Flashes boot, dtbo, vbmeta, vbmeta_system.
-            #   3. Enters fastbootd ('fastboot reboot fastboot').
-            #   4. Flashes dynamic super partitions (product, system, system_ext, vendor).
-            #   5. Routes 'system_other' to '--slot=other system' with non-fatal fallback.
-            #   6. Erases userdata and metadata for clean factory setup, and issues 'fastboot reboot'.
-            if sys.platform == "win32":
-                custom_script_path = os.path.join(script_dir, "omniflash_run.bat")
-                lines = [
-                    "@echo off",
-                    f"fastboot -s %ANDROID_SERIAL% flash bootloader {bootloader_img} || rem no bootloader" if bootloader_img else "rem no bootloader",
-                    "fastboot -s %ANDROID_SERIAL% reboot-bootloader",
-                    "timeout /t 5 /nobreak >nul",
-                    f"fastboot -s %ANDROID_SERIAL% flash radio {radio_img} || rem no radio" if radio_img else "rem no radio",
-                    "fastboot -s %ANDROID_SERIAL% reboot-bootloader",
-                    "timeout /t 5 /nobreak >nul",
-                    "if exist boot.img fastboot -s %ANDROID_SERIAL% flash boot boot.img",
-                    "if exist dtbo.img fastboot -s %ANDROID_SERIAL% flash dtbo dtbo.img",
-                    "if exist vbmeta.img fastboot -s %ANDROID_SERIAL% flash vbmeta vbmeta.img",
-                    "if exist vbmeta_system.img fastboot -s %ANDROID_SERIAL% flash vbmeta_system vbmeta_system.img",
-                    "fastboot -s %ANDROID_SERIAL% reboot fastboot",
-                    "timeout /t 5 /nobreak >nul",
-                    "if exist product.img fastboot -s %ANDROID_SERIAL% flash product product.img",
-                    "if exist system.img fastboot -s %ANDROID_SERIAL% flash system system.img",
-                    "if exist system_ext.img fastboot -s %ANDROID_SERIAL% flash system_ext system_ext.img",
-                    "if exist system_other.img fastboot -s %ANDROID_SERIAL% flash --slot=other system system_other.img",
-                    "if exist vendor.img fastboot -s %ANDROID_SERIAL% flash vendor vendor.img",
-                    "fastboot -s %ANDROID_SERIAL% erase userdata",
-                    "fastboot -s %ANDROID_SERIAL% erase metadata",
-                    "fastboot -s %ANDROID_SERIAL% reboot"
-                ]
-                with open(custom_script_path, "w", encoding="utf-8") as csf:
-                    csf.write("\r\n".join(lines) + "\r\n")
-                flash_script_path = custom_script_path
-            else:
-                custom_script_path = os.path.join(script_dir, "omniflash_run.sh")
-                lines = [
-                    "#!/bin/sh",
-                    f"fastboot -s $ANDROID_SERIAL flash bootloader {bootloader_img} || true" if bootloader_img else "# no bootloader",
-                    "fastboot -s $ANDROID_SERIAL reboot-bootloader || true",
-                    "sleep 4",
-                    f"fastboot -s $ANDROID_SERIAL flash radio {radio_img} || true" if radio_img else "# no radio",
-                    "fastboot -s $ANDROID_SERIAL reboot-bootloader || true",
-                    "sleep 4",
-                    "[ -f boot.img ] && fastboot -s $ANDROID_SERIAL flash boot boot.img || true",
-                    "[ -f dtbo.img ] && fastboot -s $ANDROID_SERIAL flash dtbo dtbo.img || true",
-                    "[ -f vbmeta.img ] && fastboot -s $ANDROID_SERIAL flash vbmeta vbmeta.img || true",
-                    "[ -f vbmeta_system.img ] && fastboot -s $ANDROID_SERIAL flash vbmeta_system vbmeta_system.img || true",
-                    "fastboot -s $ANDROID_SERIAL reboot fastboot || true",
-                    "sleep 4",
-                    "[ -f product.img ] && fastboot -s $ANDROID_SERIAL flash product product.img || true",
-                    "[ -f system.img ] && fastboot -s $ANDROID_SERIAL flash system system.img || true",
-                    "[ -f system_ext.img ] && fastboot -s $ANDROID_SERIAL flash system_ext system_ext.img || true",
-                    "[ -f system_other.img ] && fastboot -s $ANDROID_SERIAL flash --slot=other system system_other.img || true",
-                    "[ -f vendor.img ] && fastboot -s $ANDROID_SERIAL flash vendor vendor.img || true",
-                    "fastboot -s $ANDROID_SERIAL erase userdata || true",
-                    "fastboot -s $ANDROID_SERIAL erase metadata || true",
-                    "fastboot -s $ANDROID_SERIAL reboot"
-                ]
-                with open(custom_script_path, "w", encoding="utf-8") as csf:
-                    csf.write("\n".join(lines) + "\n")
-                os.chmod(custom_script_path, 0o755)
-                flash_script_path = custom_script_path
-
-            # Step 5: Execute direct high-speed flash sequence
+            # Step 5: Execute Google's official flash-all script
             broadcast_terminal("\n=====================================================", "sys")
-            broadcast_terminal("EXECUTING DIRECT HIGH-SPEED FLASH SEQUENCE", "sys")
+            broadcast_terminal("EXECUTING GOOGLE'S OFFICIAL FLASH-ALL SCRIPT", "sys")
             broadcast_terminal("DO NOT DISCONNECT OR TOUCH THE DEVICE UNTIL COMPLETE!", "warn")
             broadcast_terminal("=====================================================\n", "sys")
             

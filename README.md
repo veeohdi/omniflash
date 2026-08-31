@@ -10,8 +10,8 @@ A high-stakes, defensive local web tool for safely flashing official Google Andr
 - **Single-Device Lockdown**: Stops immediately if 0 or >1 devices are connected to prevent targeting the wrong device.
 - **Battery Safety Check**: Blocks flashing if the battery level is below 30%.
 - **Local Official Images Only**: Computes the SHA-256 checksum and requires manual verification against Google's official factory images page.
-- **Deterministic Direct Flash Script**: Generates and executes a deterministic `omniflash_run.sh` / `.bat` flash script that flashes each partition individually with explicit serial targeting (`-s`), pre-extracts firmware images to avoid USB timeout during decompression, and routes `system_other` to `--slot=other`. Based on and validated against Google's official `flash-all` scripts.
-- **Immediate Halt on Error**: Any critical failure halts the sequence without blind retries.
+- **Google's Official `flash-all` Execution**: Runs Google's official `flash-all.sh` / `flash-all.bat` script directly inside an isolated disk workspace (`workspaces/`), ensuring full super-partition layout handling, dynamic partition resizing, and immediate halt on any non-zero exit code.
+- **Immediate Halt on Error**: Any non-zero exit code from fastboot halts the sequence immediately without blind retries.
 - **Typed Confirmations**: Requires typing `UNLOCK`, `FLASH`, or `LOCK` for destructive operations.
 - **Post-Flash Boot Verification**: Confirms `sys.boot_completed == 1` and checks the Android release version before offering an optional relock step.
 - **Session Disk Logs**: Writes full command outputs, timestamps, and exit codes to `flash_logs/`.
