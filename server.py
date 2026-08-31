@@ -104,11 +104,14 @@ server_start_time = time.time()
 last_heartbeat_time = time.time()
 has_client_connected = False
 heartbeat_lock = threading.Lock()
-INITIAL_LAUNCH_GRACE_SECONDS = 35.0
-DISCONNECT_TIMEOUT_SECONDS = 90.0
+INITIAL_LAUNCH_GRACE_SECONDS = 300.0  # 5 minutes grace period before initial connection
+DISCONNECT_TIMEOUT_SECONDS = 180.0     # 3 minutes tolerance for backgrounded/throttled tabs
 
 def shutdown_server():
     """Cleanly clean up and exit server."""
+    with operation_lock:
+        if is_operation_running:
+            return  # Never shut down while an operation is actively executing
     print("\n[!] Browser window closed. Shutting down OmniFlash server...")
     os._exit(0)
 
@@ -117,6 +120,9 @@ def watchdog_worker():
     while True:
         time.sleep(1.0)
         now = time.time()
+        with operation_lock:
+            if is_operation_running:
+                continue
         with heartbeat_lock:
             connected = has_client_connected
             last_ping = last_heartbeat_time
