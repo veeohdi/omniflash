@@ -244,7 +244,7 @@ def query_device_state(ignore_busy: bool = False):
             if len(parts) >= 2 and parts[1] == "device":
                 serial = parts[0]
                 model = next((p.split(":", 1)[1] for p in parts[2:] if p.startswith("model:")), "")
-                adb_devices.append({"serial": serial, "model": model, "mode": "adb"})
+                adb_devices.append({"serial": serial, "model": model, "mode": "device"})
             elif len(parts) >= 2 and parts[1] in ("unauthorized", "offline", "recovery"):
                 adb_devices.append({"serial": parts[0], "model": "", "mode": parts[1]})
     except Exception:
