@@ -2,10 +2,10 @@
 setlocal
 cd /d "%~dp0"
 
-python --version >nul 2>&1
+python --version 2>&1 | findstr /R "Python 3\." >nul
 if %errorlevel% neq 0 (
-    echo [ERROR] Python is not installed or not in your PATH.
-    echo Please install Python from https://www.python.org/
+    echo [ERROR] Python 3 is not installed or not in your PATH.
+    echo Please install Python 3 from https://www.python.org/
     pause
     exit /b 1
 )

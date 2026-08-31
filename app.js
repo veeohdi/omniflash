@@ -6,6 +6,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     // ── Helper ───────────────────────────────────
     const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
     // ── State ────────────────────────────────────
     let deviceState = null;
@@ -224,7 +225,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (data.mode === 'android') {
             devBuild.textContent = `Android ${data.android_version} (${data.build_id})`;
             devBattery.textContent = data.battery_level >= 0 ? `${data.battery_level}%` : 'Unknown';
-            devBattery.style.color = data.battery_safe ? 'inherit' : 'var(--accent-coral)';
+            devBattery.style.color = data.battery_safe ? 'inherit' : 'var(--accent-red)';
             if (data.bootloader_locked === true) {
                 devBootloader.textContent = 'LOCKED';
                 devBootloader.style.color = 'var(--accent-amber)';
@@ -243,7 +244,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data.battery_voltage) {
                 const vText = data.battery_voltage.includes('mV') ? data.battery_voltage : `${data.battery_voltage} mV`;
                 devBattery.textContent = data.battery_safe ? vText : `${vText} (LOW BATTERY)`;
-                devBattery.style.color = data.battery_safe ? 'inherit' : 'var(--accent-coral)';
+                devBattery.style.color = data.battery_safe ? 'inherit' : 'var(--accent-red)';
             } else {
                 devBattery.textContent = 'Fastboot Connected';
                 devBattery.style.color = 'inherit';
@@ -361,7 +362,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         requestTypedConfirmation(
             'Confirm Firmware Flash',
-            `You are about to flash <strong>Android ${inspectedImage.android_version} (${inspectedImage.build_id})</strong> onto your Pixel 4 XL.<br><br>
+            `You are about to flash <strong>Android ${esc(inspectedImage.android_version)} (${esc(inspectedImage.build_id)})</strong> onto your Pixel 4 XL.<br><br>
             <strong>All user data will be wiped.</strong> Keep USB connected throughout.`,
             'FLASH',
             async () => {
@@ -518,9 +519,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 row.className = 'apk-item-row';
                 row.innerHTML = `
                     <div class="apk-item-left">
-                        <input type="checkbox" class="chk-apk-item" id="apk-chk-${index}" data-path="${item.file_path}" checked>
+                        <input type="checkbox" class="chk-apk-item" id="apk-chk-${index}" data-path="${esc(item.file_path)}" checked>
                         <div class="apk-item-info">
-                            <label for="apk-chk-${index}" class="apk-item-name" title="${item.filename}">${item.filename}</label>
+                            <label for="apk-chk-${index}" class="apk-item-name" title="${esc(item.filename)}">${esc(item.filename)}</label>
                             <span class="apk-item-meta font-mono">${item.size_mb} MB &bull; ${item.type === 'bundle' ? 'Split Bundle (.apkm/.apks)' : 'Single APK'}</span>
                         </div>
                     </div>
@@ -584,15 +585,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateApkInstallButtonState();
             } else {
                 // Poll until operation finishes
+                let installPollCount = 0;
                 const checkInterval = setInterval(async () => {
+                    installPollCount++;
                     try {
                         const st = await (await fetch('/api/device/state')).json();
                         if (st.status !== 'busy') {
                             clearInterval(checkInterval);
                             isInstallingApks = false;
                             updateApkInstallButtonState();
+                            if (st.status === 'disconnected') {
+                                logToTerminal('[WARNING] Device disconnected during APK installation.', 'warn');
+                            }
                         }
                     } catch (e) {}
+                    if (installPollCount >= 600) {
+                        clearInterval(checkInterval);
+                        isInstallingApks = false;
+                        updateApkInstallButtonState();
+                        logToTerminal('[WARNING] APK installation poll timed out.', 'warn');
+                    }
                 }, 1500);
             }
         } catch (e) {

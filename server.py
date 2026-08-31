@@ -268,7 +268,7 @@ def query_device_state(ignore_busy: bool = False):
     # We must accept both 'fastboot' and 'fastbootd' so the UI does not misidentify the device as disconnected.
     try:
         res_fb = subprocess.run([fastboot_path, "devices"], capture_output=True, text=True, timeout=4)
-        for line in res_fb.splitlines() if isinstance(res_fb, list) else res_fb.stdout.splitlines():
+        for line in res_fb.stdout.splitlines():
             parts = line.strip().split()
             if len(parts) >= 2 and parts[1] in ("fastboot", "fastbootd"):
                 serial = parts[0]
@@ -431,7 +431,8 @@ def api_heartbeat():
     with heartbeat_lock:
         last_heartbeat_time = time.time()
         has_client_connected = True
-    return jsonify({"status": "ok", "time": last_heartbeat_time})
+        t = last_heartbeat_time
+    return jsonify({"status": "ok", "time": t})
 
 @app.route('/api/tab_closed', methods=['POST'])
 def api_tab_closed():
@@ -739,9 +740,11 @@ def api_flash_start():
     logfile = get_session_logfile("flash")
     log_to_file(logfile, "=== Starting Pixel 4 XL Flash Session ===")
     log_to_file(logfile, f"Target Zip: {zip_path}")
+    global last_flash_result
+    last_flash_result = {"completed": False, "success": False, "error": None}
     
     def flash_worker():
-        global is_operation_running, current_operation_name
+        global is_operation_running, current_operation_name, last_flash_result
         temp_extract_dir = None
         try:
             broadcast_terminal("=====================================================", "sys")
@@ -878,26 +881,26 @@ def api_flash_start():
                 custom_script_path = os.path.join(script_dir, "omniflash_run.bat")
                 lines = [
                     "@echo off",
-                    f"fastboot flash bootloader {bootloader_img} || rem no bootloader" if bootloader_img else "rem no bootloader",
-                    "fastboot reboot-bootloader",
+                    f"fastboot -s %ANDROID_SERIAL% flash bootloader {bootloader_img} || rem no bootloader" if bootloader_img else "rem no bootloader",
+                    "fastboot -s %ANDROID_SERIAL% reboot-bootloader",
                     "timeout /t 5 /nobreak >nul",
-                    f"fastboot flash radio {radio_img} || rem no radio" if radio_img else "rem no radio",
-                    "fastboot reboot-bootloader",
+                    f"fastboot -s %ANDROID_SERIAL% flash radio {radio_img} || rem no radio" if radio_img else "rem no radio",
+                    "fastboot -s %ANDROID_SERIAL% reboot-bootloader",
                     "timeout /t 5 /nobreak >nul",
-                    "if exist boot.img fastboot flash boot boot.img",
-                    "if exist dtbo.img fastboot flash dtbo dtbo.img",
-                    "if exist vbmeta.img fastboot flash vbmeta vbmeta.img",
-                    "if exist vbmeta_system.img fastboot flash vbmeta_system vbmeta_system.img",
-                    "fastboot reboot fastboot",
+                    "if exist boot.img fastboot -s %ANDROID_SERIAL% flash boot boot.img",
+                    "if exist dtbo.img fastboot -s %ANDROID_SERIAL% flash dtbo dtbo.img",
+                    "if exist vbmeta.img fastboot -s %ANDROID_SERIAL% flash vbmeta vbmeta.img",
+                    "if exist vbmeta_system.img fastboot -s %ANDROID_SERIAL% flash vbmeta_system vbmeta_system.img",
+                    "fastboot -s %ANDROID_SERIAL% reboot fastboot",
                     "timeout /t 5 /nobreak >nul",
-                    "if exist product.img fastboot flash product product.img",
-                    "if exist system.img fastboot flash system system.img",
-                    "if exist system_ext.img fastboot flash system_ext system_ext.img",
-                    "if exist system_other.img fastboot flash --slot=other system system_other.img",
-                    "if exist vendor.img fastboot flash vendor vendor.img",
-                    "fastboot -w erase userdata",
-                    "fastboot erase metadata",
-                    "fastboot reboot"
+                    "if exist product.img fastboot -s %ANDROID_SERIAL% flash product product.img",
+                    "if exist system.img fastboot -s %ANDROID_SERIAL% flash system system.img",
+                    "if exist system_ext.img fastboot -s %ANDROID_SERIAL% flash system_ext system_ext.img",
+                    "if exist system_other.img fastboot -s %ANDROID_SERIAL% flash --slot=other system system_other.img",
+                    "if exist vendor.img fastboot -s %ANDROID_SERIAL% flash vendor vendor.img",
+                    "fastboot -s %ANDROID_SERIAL% erase userdata",
+                    "fastboot -s %ANDROID_SERIAL% erase metadata",
+                    "fastboot -s %ANDROID_SERIAL% reboot"
                 ]
                 with open(custom_script_path, "w", encoding="utf-8") as csf:
                     csf.write("\r\n".join(lines) + "\r\n")
@@ -906,27 +909,26 @@ def api_flash_start():
                 custom_script_path = os.path.join(script_dir, "omniflash_run.sh")
                 lines = [
                     "#!/bin/sh",
-                    "set -e",
-                    f"fastboot flash bootloader {bootloader_img} || true" if bootloader_img else "# no bootloader",
-                    "fastboot reboot-bootloader || true",
+                    f"fastboot -s $ANDROID_SERIAL flash bootloader {bootloader_img} || true" if bootloader_img else "# no bootloader",
+                    "fastboot -s $ANDROID_SERIAL reboot-bootloader || true",
                     "sleep 4",
-                    f"fastboot flash radio {radio_img} || true" if radio_img else "# no radio",
-                    "fastboot reboot-bootloader || true",
+                    f"fastboot -s $ANDROID_SERIAL flash radio {radio_img} || true" if radio_img else "# no radio",
+                    "fastboot -s $ANDROID_SERIAL reboot-bootloader || true",
                     "sleep 4",
-                    "[ -f boot.img ] && fastboot flash boot boot.img",
-                    "[ -f dtbo.img ] && fastboot flash dtbo dtbo.img",
-                    "[ -f vbmeta.img ] && fastboot flash vbmeta vbmeta.img",
-                    "[ -f vbmeta_system.img ] && fastboot flash vbmeta_system vbmeta_system.img",
-                    "fastboot reboot fastboot || true",
+                    "[ -f boot.img ] && fastboot -s $ANDROID_SERIAL flash boot boot.img || true",
+                    "[ -f dtbo.img ] && fastboot -s $ANDROID_SERIAL flash dtbo dtbo.img || true",
+                    "[ -f vbmeta.img ] && fastboot -s $ANDROID_SERIAL flash vbmeta vbmeta.img || true",
+                    "[ -f vbmeta_system.img ] && fastboot -s $ANDROID_SERIAL flash vbmeta_system vbmeta_system.img || true",
+                    "fastboot -s $ANDROID_SERIAL reboot fastboot || true",
                     "sleep 4",
-                    "[ -f product.img ] && fastboot flash product product.img",
-                    "[ -f system.img ] && fastboot flash system system.img",
-                    "[ -f system_ext.img ] && fastboot flash system_ext system_ext.img",
-                    "[ -f system_other.img ] && fastboot flash --slot=other system system_other.img || true",
-                    "[ -f vendor.img ] && fastboot flash vendor vendor.img",
-                    "fastboot -w erase userdata || fastboot erase userdata",
-                    "fastboot erase metadata || true",
-                    "fastboot reboot"
+                    "[ -f product.img ] && fastboot -s $ANDROID_SERIAL flash product product.img || true",
+                    "[ -f system.img ] && fastboot -s $ANDROID_SERIAL flash system system.img || true",
+                    "[ -f system_ext.img ] && fastboot -s $ANDROID_SERIAL flash system_ext system_ext.img || true",
+                    "[ -f system_other.img ] && fastboot -s $ANDROID_SERIAL flash --slot=other system system_other.img || true",
+                    "[ -f vendor.img ] && fastboot -s $ANDROID_SERIAL flash vendor vendor.img || true",
+                    "fastboot -s $ANDROID_SERIAL erase userdata || true",
+                    "fastboot -s $ANDROID_SERIAL erase metadata || true",
+                    "fastboot -s $ANDROID_SERIAL reboot"
                 ]
                 with open(custom_script_path, "w", encoding="utf-8") as csf:
                     csf.write("\n".join(lines) + "\n")

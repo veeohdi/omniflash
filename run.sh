@@ -19,6 +19,11 @@ SERVER_PID=$!
 
 # Wait for server to become responsive
 python3 wait_for_server.py
+if [ $? -ne 0 ]; then
+    echo "[!] Server did not start within 30 seconds. Aborting."
+    kill $SERVER_PID 2>/dev/null
+    exit 1
+fi
 
 # Open web browser
 if command -v xdg-open &> /dev/null; then

@@ -154,6 +154,12 @@ body {
   border-color: rgba(251, 191, 36, 0.3);
 }
 
+.badge-yellow {
+  background: rgba(251, 191, 36, 0.15);
+  color: var(--accent-amber);
+  border-color: rgba(251, 191, 36, 0.3);
+}
+
 .main-layout {
   display: grid;
   grid-template-columns: 1fr 1.15fr;
@@ -237,6 +243,10 @@ body {
 
 .font-mono {
   font-family: var(--font-mono);
+}
+
+.font-bold {
+  font-weight: 700;
 }
 
 /* ─────────────────────────────────────────────
@@ -356,6 +366,16 @@ body {
 
 .btn-warning:hover:not(:disabled) {
   background: rgba(251, 191, 36, 0.25);
+}
+
+.btn-success {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-green);
+  border-color: rgba(16, 185, 129, 0.4);
+}
+
+.btn-success:hover:not(:disabled) {
+  background: rgba(16, 185, 129, 0.25);
 }
 
 .btn-outline {
@@ -762,5 +782,5 @@ body {
 }
 
 .text-warning {
-  color: var(--accent-yellow) !important;
+  color: var(--accent-amber) !important;
 }
