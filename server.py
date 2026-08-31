@@ -810,6 +810,17 @@ def api_flash_start():
                 last_flash_result = {"completed": True, "success": False, "error": f"{flash_script_name} missing"}
                 return
 
+            # Ensure fastboot splits partition images into safe 512M chunks for USB controllers
+            try:
+                with open(flash_script_path, "r", encoding="utf-8", errors="ignore") as sf:
+                    script_content = sf.read()
+                if "-S 512M" not in script_content:
+                    script_content = re.sub(r'fastboot\s+(-w\s+)?update', r'fastboot -S 512M \1update', script_content)
+                    with open(flash_script_path, "w", encoding="utf-8") as sf:
+                        sf.write(script_content)
+            except Exception:
+                pass
+
             if sys.platform != "win32":
                 os.chmod(flash_script_path, 0o755)
 
