@@ -153,11 +153,12 @@
                             </div>
 
                             <div class="checksum-verify-banner">
-                                <p>Verify hash against: <a href="https://developers.google.com/android/images#coral" target="_blank" rel="noopener">Google Pixel Factory Images Page (coral)</a></p>
-                                <label class="checkbox-container">
+                                <div class="verify-source-link">
+                                    Official source: <a href="https://developers.google.com/android/images#coral" target="_blank" rel="noopener">Google Pixel Factory Images Page (coral)</a>
+                                </div>
+                                <label class="checkbox-container" for="chk-verify-hash">
                                     <input type="checkbox" id="chk-verify-hash">
-                                    <span class="checkmark"></span>
-                                    <strong>I have manually cross-checked this SHA-256 checksum against Google's official page for this exact build.</strong>
+                                    <span><strong>I have cross-checked this SHA-256 checksum against Google's published hash.</strong></span>
                                 </label>
                             </div>
                         </div>
