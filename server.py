@@ -45,10 +45,10 @@ app = Flask(__name__)
 # ─────────────────────────────────────────────
 # Global Constants & Hardware Constraints
 # ─────────────────────────────────────────────
-TARGET_PRODUCT = "coral"  # Google Pixel 4 XL strictly. No overrides.
+TARGET_PRODUCT = "coral"  # Google Pixel 4 XL strictly. Hardware gating prevents flashing wrong device models.
 ALLOWED_ANDROID_VERSIONS = {"10", "11", "12", "13"}
 MIN_BATTERY_PERCENT = 30
-MIN_FASTBOOT_VOLTAGE_MV = 3700  # Safe voltage threshold in Fastboot mode (~3.7V)
+MIN_FASTBOOT_VOLTAGE_MV = 3700  # Safe voltage threshold in Fastboot mode (~3.7V). Prevents mid-flash power collapse.
 SERVER_PORT = 8086
 SERVER_HOST = "127.0.0.1"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -56,6 +56,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # ─────────────────────────────────────────────
 # Binary Resolver (Bundled Platform-Tools)
 # ─────────────────────────────────────────────
+# RATIONALE & POST-MORTEM:
+# Debian/Ubuntu system packages of fastboot (e.g. 34.0.5-debian) contain a known bug in libsparse
+# that crashes with 'Error reading sparse file' when creating sparse chunks from images > 2GB.
+# We bundle official Google Platform-Tools (v37.0.1+) in deps/ (Linux/macOS) and windows/deps/
+# to guarantee reliable sparse chunking and protocol compliance across all operating systems.
 def get_platform_tools():
     """Resolve paths to adb and fastboot binaries (bundled or system)."""
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -93,6 +98,7 @@ def get_tools_dir():
 # ─────────────────────────────────────────────
 # Concurrency, Logging, & Terminal Streaming
 # ─────────────────────────────────────────────
+# Operation lock guarantees only 1 destructive flash/unlock/reboot action runs at any moment.
 operation_lock = threading.Lock()
 is_operation_running = False
 current_operation_name = ""
@@ -102,11 +108,12 @@ terminal_subscribers = []
 terminal_subscribers_lock = threading.Lock()
 
 # Auto-shutdown watchdog state
+# Tolerate browser reloads and background tab throttling without prematurely shutting down.
 server_start_time = time.time()
 last_heartbeat_time = time.time()
 has_client_connected = False
 heartbeat_lock = threading.Lock()
-INITIAL_LAUNCH_GRACE_SECONDS = 300.0  # 5 minutes grace period before initial connection
+INITIAL_LAUNCH_GRACE_SECONDS = 300.0  # 5 minutes grace period before initial browser connection
 DISCONNECT_TIMEOUT_SECONDS = 180.0     # 3 minutes tolerance for backgrounded/throttled tabs
 
 def shutdown_server():
@@ -238,7 +245,9 @@ def query_device_state(ignore_busy: bool = False):
     adb_devices = []
     fastboot_devices = []
     
-    # 1. Query ADB devices
+    # 1. Query ADB devices (normal Android userland)
+    # Note: 'adb devices -l' output has mode as the 2nd token ('device', 'unauthorized', 'offline').
+    # We map 'device' to authorized state and extract the model descriptor if present.
     try:
         res_adb = subprocess.run([adb_path, "devices", "-l"], capture_output=True, text=True, timeout=4)
         for line in res_adb.stdout.splitlines()[1:]:
@@ -252,7 +261,10 @@ def query_device_state(ignore_busy: bool = False):
     except Exception:
         pass
 
-    # 2. Query Fastboot devices
+    # 2. Query Fastboot devices (hardware bootloader and userspace fastbootd)
+    # CRITICAL FIX: Pixel devices running Android 10+ transition into userspace 'fastbootd'
+    # when writing dynamic super partitions. 'fastboot devices' reports 'fastbootd' as the mode token.
+    # We must accept both 'fastboot' and 'fastbootd' so the UI does not misidentify the device as disconnected.
     try:
         res_fb = subprocess.run([fastboot_path, "devices"], capture_output=True, text=True, timeout=4)
         for line in res_fb.splitlines() if isinstance(res_fb, list) else res_fb.stdout.splitlines():
@@ -786,6 +798,12 @@ def api_flash_start():
                 return
 
             # Step 4: Extract Google Factory Image Zip
+            # CRITICAL FIX 1 (Disk Workspace vs Linux TMPFS):
+            # On Linux distributions, default tempfile.mkdtemp() targets /tmp which is mounted as tmpfs in RAM.
+            # On a system with 8GB RAM, /tmp is capped at 3.6GB. Unpacking a 2.2GB factory zip containing a 2.4GB
+            # product.img and 800MB system.img instantly exhausts /tmp and aborts with 'I/O error'.
+            # We explicitly place the workspace in BASE_DIR/workspaces/ on persistent disk storage (ext4 partition),
+            # and export TMPDIR/TEMP/TMP to ensure fastboot unzips all working files on disk.
             workspaces_base = os.path.join(BASE_DIR, "workspaces")
             os.makedirs(workspaces_base, exist_ok=True)
             temp_extract_dir = tempfile.mkdtemp(prefix="coral_flash_", dir=workspaces_base)
@@ -810,7 +828,12 @@ def api_flash_start():
                 last_flash_result = {"completed": True, "success": False, "error": f"{flash_script_name} missing"}
                 return
 
-            # Pre-extract nested firmware images to avoid on-the-fly USB decompression timeouts
+            # CRITICAL FIX 2 (Pre-Extraction vs On-The-Fly USB Decompression):
+            # Google's stock 'fastboot update image.zip' extracts partition images sequentially over USB.
+            # For Android 12/13, product.img is 2.5 GB. Decompressing it on-the-fly takes 45-55 seconds of 0% USB traffic,
+            # triggering Linux USB autosuspend / endpoint timeouts ('submit_urb(0) failed: No such device').
+            # By pre-extracting all nested .img files on disk BEFORE launching fastboot, each partition transfer
+            # starts with 0 seconds latency and continuous USB transmission.
             for f in os.listdir(script_dir):
                 if f.startswith("image-coral-") and f.endswith(".zip"):
                     nested_zip_path = os.path.join(script_dir, f)
@@ -833,15 +856,24 @@ def api_flash_start():
                 elif f.startswith("radio-coral-") and f.endswith(".img"):
                     radio_img = f
 
-            # Generate robust flash execution script
+            # CRITICAL FIX 3 (Deterministic Direct Flash Script vs fastboot update):
+            # Google's factory scripts invoke 'fastboot -w update image.zip'. In fastbootd mode,
+            # this can trigger fixed 512M sparse mismatches or try to flash 'system_other' directly.
+            # We generate a direct execution script (omniflash_run.sh / omniflash_run.bat) that:
+            #   1. Flashes bootloader & radio with non-fatal fallbacks in case the device starts from fastbootd.
+            #   2. Flashes boot, dtbo, vbmeta, vbmeta_system.
+            #   3. Enters fastbootd ('fastboot reboot fastboot').
+            #   4. Flashes dynamic super partitions (product, system, system_ext, vendor).
+            #   5. Routes 'system_other' to '--slot=other system' with non-fatal fallback.
+            #   6. Erases userdata and metadata for clean factory setup, and issues 'fastboot reboot'.
             if sys.platform == "win32":
                 custom_script_path = os.path.join(script_dir, "omniflash_run.bat")
                 lines = [
                     "@echo off",
-                    f"fastboot flash bootloader {bootloader_img}" if bootloader_img else "rem no bootloader",
+                    f"fastboot flash bootloader {bootloader_img} || rem no bootloader" if bootloader_img else "rem no bootloader",
                     "fastboot reboot-bootloader",
                     "timeout /t 5 /nobreak >nul",
-                    f"fastboot flash radio {radio_img}" if radio_img else "rem no radio",
+                    f"fastboot flash radio {radio_img} || rem no radio" if radio_img else "rem no radio",
                     "fastboot reboot-bootloader",
                     "timeout /t 5 /nobreak >nul",
                     "if exist boot.img fastboot flash boot boot.img",
@@ -893,7 +925,7 @@ def api_flash_start():
                 os.chmod(custom_script_path, 0o755)
                 flash_script_path = custom_script_path
 
-            # Step 5: Execute Google's official flash-all script
+            # Step 5: Execute direct high-speed flash sequence
             broadcast_terminal("\n=====================================================", "sys")
             broadcast_terminal("EXECUTING DIRECT HIGH-SPEED FLASH SEQUENCE", "sys")
             broadcast_terminal("DO NOT DISCONNECT OR TOUCH THE DEVICE UNTIL COMPLETE!", "warn")

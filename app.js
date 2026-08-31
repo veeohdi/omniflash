@@ -385,9 +385,18 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // ── Post-Flash Boot Verification ─────────────
+    // ARCHITECTURAL NOTE:
+    // After fastboot sends 'fastboot reboot', the device enters Android initial boot sequence
+    // (first-time boot decryption, DEX compilation, and sys.boot_completed signal).
+    // This process can take between 90s to 240s.
+    // We poll /api/flash/verify every 2 seconds:
+    //   - If the background flash worker logged an exit code != 0, it returns 'failed: true' immediately,
+    //     canceling the interval and stopping false infinite polling.
+    //   - Once ADB reconnects and reports sys.boot_completed == 1 with matching ro.build.version.release,
+    //     the UI marks the flash as 100% verified and unlocks the optional bootloader relock button.
     function startBootVerification(expectedVer) {
         let attempts = 0;
-        const maxAttempts = 150; // ~5 minutes
+        const maxAttempts = 150; // ~5 minutes timeout window
 
         if (verifyInterval) clearInterval(verifyInterval);
         verifyInterval = setInterval(async () => {
@@ -400,6 +409,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 const data = await res.json();
 
+                // If backend worker reported failure (e.g. fastboot command error or USB drop)
                 if (data.failed) {
                     clearInterval(verifyInterval);
                     verifyInterval = null;
@@ -410,6 +420,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     return;
                 }
 
+                // Successful boot completion & OS release verification
                 if (data.completed && data.verified) {
                     clearInterval(verifyInterval);
                     verifyInterval = null;
@@ -422,7 +433,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     verifyMsg.textContent = `${data.message} (Polling: ${attempts * 2}s)`;
                 }
             } catch (e) {
-                // Ignore transient network errors while device is rebooting
+                // Ignore transient network errors while server is processing USB events or rebooting
             }
 
             if (attempts >= maxAttempts) {
