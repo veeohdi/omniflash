@@ -148,6 +148,14 @@ def watchdog_worker():
 
 threading.Thread(target=watchdog_worker, daemon=True).start()
 
+current_flash_milestone = {
+    "step": 0,
+    "phase": "idle",
+    "title": "",
+    "message": "",
+    "pct": 0
+}
+
 def broadcast_terminal(message: str, line_type: str = "out"):
     """Broadcast a line of output to all active web terminal listeners."""
     with terminal_subscribers_lock:
@@ -157,6 +165,101 @@ def broadcast_terminal(message: str, line_type: str = "out"):
                 q.put_nowait(payload)
             except queue.Full:
                 pass
+
+def broadcast_milestone(step: int, phase: str, title: str, message: str, pct: int):
+    """Broadcast structured milestone update to all active web listeners."""
+    global current_flash_milestone
+    # Avoid regressing progress percentage unless starting fresh or on error
+    if phase not in ("init", "error") and current_flash_milestone:
+        prev_pct = current_flash_milestone.get("pct", 0)
+        prev_step = current_flash_milestone.get("step", 1)
+        if pct < prev_pct:
+            pct = prev_pct
+        if step < prev_step:
+            step = prev_step
+
+    current_flash_milestone = {
+        "step": step,
+        "phase": phase,
+        "title": title,
+        "message": message,
+        "pct": pct
+    }
+    with terminal_subscribers_lock:
+        payload = {
+            "type": "milestone",
+            "step": step,
+            "phase": phase,
+            "title": title,
+            "message": message,
+            "pct": pct,
+            "time": datetime.now().strftime("%H:%M:%S")
+        }
+        for q in list(terminal_subscribers):
+            try:
+                q.put_nowait(payload)
+            except queue.Full:
+                pass
+
+def detect_flash_milestone(line: str) -> dict | None:
+    """Parse fastboot output lines into high-level human-readable milestones."""
+    # Step 1: Bootloader & Radio
+    if "Sending 'bootloader" in line or "Writing 'bootloader" in line:
+        return {"step": 1, "phase": "bootloader", "title": "Flashing Bootloader", "message": "Writing secondary bootloader partition image...", "pct": 10}
+    if "Sending 'radio" in line or "Writing 'radio" in line:
+        return {"step": 1, "phase": "radio", "title": "Flashing Radio Firmware", "message": "Writing cellular modem baseband firmware...", "pct": 20}
+    
+    # Step 2: Kernel & AVB
+    if "Sending 'boot" in line or "Writing 'boot" in line:
+        return {"step": 2, "phase": "boot", "title": "Flashing Kernel & AVB", "message": "Writing Linux boot kernel and ramdisk...", "pct": 28}
+    if "Sending 'dtbo" in line or "Writing 'dtbo" in line:
+        return {"step": 2, "phase": "dtbo", "title": "Flashing Kernel & AVB", "message": "Writing Device Tree Overlays (DTBO)...", "pct": 32}
+    if "Sending 'vbmeta" in line or "Writing 'vbmeta" in line:
+        return {"step": 2, "phase": "vbmeta", "title": "Flashing Kernel & AVB", "message": "Writing Android Verified Boot (AVB) cryptographic keys...", "pct": 36}
+        
+    # Step 3: Fastbootd Transition & Super Table
+    if "Rebooting into fastboot" in line or "< waiting for" in line:
+        return {"step": 3, "phase": "fastbootd_switch", "title": "Fastbootd Transition", "message": "Switching from hardware bootloader to userspace fastbootd for dynamic partitions...", "pct": 42}
+    if "Updating super partition" in line:
+        return {"step": 3, "phase": "super_table", "title": "Super Partition Setup", "message": "Super partition table updated and resized for dynamic volumes.", "pct": 46}
+        
+    # Step 4: Dynamic Super Partitions (Product, System, System_ext, System_other, Vendor) - supports both slot a and b
+    m_prod = re.search(r"Sending sparse 'product_[ab]' (\d+)/(\d+)", line)
+    if m_prod:
+        cur, tot = int(m_prod.group(1)), int(m_prod.group(2))
+        pct = int(46 + (cur / tot) * 18)
+        return {"step": 4, "phase": "product", "title": "Writing Dynamic Super Partitions", "message": f"Writing Product partition (chunk {cur} of {tot})...", "pct": pct}
+        
+    m_sys = re.search(r"Sending sparse 'system_[ab]' (\d+)/(\d+)", line)
+    if m_sys:
+        cur, tot = int(m_sys.group(1)), int(m_sys.group(2))
+        pct = int(64 + (cur / tot) * 14)
+        return {"step": 4, "phase": "system", "title": "Writing Dynamic Super Partitions", "message": f"Writing System OS partition (chunk {cur} of {tot})...", "pct": pct}
+        
+    m_sysext = re.search(r"Sending sparse 'system_ext_[ab]' (\d+)/(\d+)", line)
+    if m_sysext:
+        cur, tot = int(m_sysext.group(1)), int(m_sysext.group(2))
+        pct = int(78 + (cur / tot) * 4)
+        return {"step": 4, "phase": "system_ext", "title": "Writing Dynamic Super Partitions", "message": f"Writing System_ext partition (chunk {cur} of {tot})...", "pct": pct}
+
+    if ("Sending 'system_other" in line or "Sending 'system_a" in line or "Sending 'system_b" in line) and "sparse" not in line:
+        return {"step": 4, "phase": "system_other", "title": "Writing Dynamic Super Partitions", "message": "Writing secondary slot system cache (system_other)...", "pct": 83}
+
+    m_ven = re.search(r"Sending sparse 'vendor_[ab]' (\d+)/(\d+)", line)
+    if m_ven:
+        cur, tot = int(m_ven.group(1)), int(m_ven.group(2))
+        pct = int(84 + (cur / tot) * 8)
+        return {"step": 4, "phase": "vendor", "title": "Writing Dynamic Super Partitions", "message": f"Writing Vendor hardware HAL partition (chunk {cur} of {tot})...", "pct": pct}
+
+    # Step 5: Wipe & Reboot
+    if "Erasing 'userdata'" in line:
+        return {"step": 5, "phase": "wipe_userdata", "title": "Factory Reset & Wipe", "message": "Erasing userdata and formatting encryption keys...", "pct": 94}
+    if "Erasing 'metadata'" in line:
+        return {"step": 5, "phase": "wipe_metadata", "title": "Factory Reset & Wipe", "message": "Erasing metadata partition for clean factory state...", "pct": 97}
+    if "Rebooting" in line and "fastboot" not in line.lower() and "bootloader" not in line.lower():
+        return {"step": 5, "phase": "reboot", "title": "Device Reboot", "message": "Reboot command sent! Device is now rebooting into Android...", "pct": 99}
+
+    return None
 
 def get_session_logfile(action_name: str = "flash") -> str:
     """Create a unique session log file in flash_logs/."""
@@ -881,11 +984,28 @@ def api_flash_start():
                 bufsize=1
             )
 
+            broadcast_milestone(
+                step=1,
+                phase="init",
+                title="Preparing Flash Sequence",
+                message="Extracted factory archive. Executing flash sequence...",
+                pct=5
+            )
+
             for line in iter(proc.stdout.readline, ''):
                 clean = line.rstrip('\r\n')
                 if clean:
                     broadcast_terminal(clean, "out")
                     log_to_file(logfile, clean)
+                    m = detect_flash_milestone(clean)
+                    if m:
+                        broadcast_milestone(
+                            step=m["step"],
+                            phase=m["phase"],
+                            title=m["title"],
+                            message=m["message"],
+                            pct=m["pct"]
+                        )
 
             proc.wait()
             exit_code = proc.returncode
@@ -893,10 +1013,24 @@ def api_flash_start():
 
             if exit_code != 0:
                 last_flash_result = {"completed": True, "success": False, "error": f"flash-all exited with code {exit_code}"}
+                broadcast_milestone(
+                    step=current_flash_milestone.get("step", 5),
+                    phase="error",
+                    title="Flash Failed",
+                    message=f"Firmware flash halted with exit code {exit_code}. Check session log for details.",
+                    pct=current_flash_milestone.get("pct", 50)
+                )
                 broadcast_terminal(f"\n[!] FLASH FAILED with exit code {exit_code}.", "error")
                 broadcast_terminal(f"    Check session log for details: {logfile}", "error")
             else:
                 last_flash_result = {"completed": True, "success": True, "error": None}
+                broadcast_milestone(
+                    step=6,
+                    phase="first_boot",
+                    title="Flash Completed - First Boot",
+                    message="Flash completed with Exit Code 0! The device is rebooting for its first boot. It will reach the 'Welcome to your Pixel' screen in 1-2 minutes.",
+                    pct=100
+                )
                 broadcast_terminal("\n=====================================================", "success")
                 broadcast_terminal("FLASH-ALL SCRIPT COMPLETED SUCCESSFULLY!", "success")
                 broadcast_terminal("The device is now rebooting into Android for its first boot.", "success")
@@ -905,6 +1039,13 @@ def api_flash_start():
 
         except Exception as e:
             last_flash_result = {"completed": True, "success": False, "error": str(e)}
+            broadcast_milestone(
+                step=current_flash_milestone.get("step", 1),
+                phase="error",
+                title="Execution Exception",
+                message=f"Exception during flash execution: {e}",
+                pct=current_flash_milestone.get("pct", 0)
+            )
             broadcast_terminal(f"\nException during flash execution: {e}", "error")
             log_to_file(logfile, f"Exception: {e}")
         finally:
@@ -920,6 +1061,11 @@ def api_flash_start():
 
     threading.Thread(target=flash_worker, daemon=True).start()
     return jsonify({"status": "started", "message": "Flashing process initiated."})
+
+@app.route('/api/flash/milestone', methods=['GET'])
+def api_flash_milestone():
+    """Return the current high-level milestone state."""
+    return jsonify(current_flash_milestone)
 
 @app.route('/api/flash/verify', methods=['POST'])
 def api_flash_verify():

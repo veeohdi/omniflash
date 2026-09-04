@@ -55,6 +55,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const relockContainer = $('relock-container');
     const btnRelock = $('btn-relock');
 
+    // ── Flash Milestone Progress & Heads-Up Elements ──
+    const flashProgressTracker = $('flash-progress-tracker');
+    const flashProgressFill = $('flash-progress-fill');
+    const flashProgressLabel = $('flash-progress-label');
+    const headsupTitle = $('headsup-title');
+    const headsupDesc = $('headsup-desc');
+    const headsupCallout = $('headsup-callout');
+
     // ── Batch APK Installer Elements ─────────────
     const apkPathInput = $('apk-path-input');
     const btnScanApks = $('btn-scan-apks');
@@ -97,6 +105,52 @@ document.addEventListener('DOMContentLoaded', () => {
         terminalOutput.innerHTML = '';
     });
 
+    // ── Live Flash Milestone Progress & Heads-Up ──
+    function updateFlashMilestone(m) {
+        if (!flashProgressTracker) return;
+        flashProgressTracker.classList.remove('hidden');
+
+        if (m.pct !== undefined) {
+            flashProgressFill.style.width = `${m.pct}%`;
+            flashProgressLabel.textContent = `${m.pct}%`;
+        }
+
+        if (m.title && headsupTitle) {
+            headsupTitle.textContent = m.title;
+        }
+
+        if (m.message && headsupDesc) {
+            headsupDesc.textContent = m.message;
+        }
+
+        // Update 6 stepper nodes
+        const currentStep = m.step || 1;
+        for (let i = 1; i <= 6; i++) {
+            const node = $(`step-node-${i}`);
+            if (!node) continue;
+            node.classList.remove('active', 'completed');
+            if (i < currentStep) {
+                node.classList.add('completed');
+            } else if (i === currentStep) {
+                if (m.phase === 'first_boot') {
+                    node.classList.add('completed');
+                } else {
+                    node.classList.add('active');
+                }
+            }
+        }
+
+        if (m.phase === 'first_boot' || m.pct >= 100) {
+            headsupCallout.classList.remove('headsup-error');
+            headsupCallout.classList.add('headsup-success');
+        } else if (m.phase === 'error') {
+            headsupCallout.classList.remove('headsup-success');
+            headsupCallout.classList.add('headsup-error');
+        } else {
+            headsupCallout.classList.remove('headsup-error', 'headsup-success');
+        }
+    }
+
     // ── Live SSE Terminal Stream ─────────────────
     function connectSSE() {
         const evtSource = new EventSource('/api/stream');
@@ -104,7 +158,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!e.data || e.data.startsWith(':')) return;
             try {
                 const payload = JSON.parse(e.data);
-                logToTerminal(payload.text, payload.type);
+                if (payload.type === 'milestone') {
+                    updateFlashMilestone(payload);
+                } else {
+                    logToTerminal(payload.text, payload.type);
+                }
             } catch (err) {
                 // Ignore parse errors on keepalive
             }
@@ -114,6 +172,16 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
     connectSSE();
+
+    // Check if a flash milestone is currently active or recorded
+    fetch('/api/flash/milestone')
+        .then(r => r.json())
+        .then(m => {
+            if (m && m.step) {
+                updateFlashMilestone(m);
+            }
+        })
+        .catch(() => {});
 
     // ── Modal Confirmation Helper ────────────────
     function requestTypedConfirmation(title, description, phrase, onConfirmed) {
@@ -370,6 +438,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateFlashButtonState();
                 verifyMsg.textContent = 'Flashing in progress. Do NOT disconnect...';
                 relockContainer.classList.add('hidden');
+                updateFlashMilestone({
+                    step: 1,
+                    phase: 'init',
+                    pct: 5,
+                    title: 'Preparing Firmware Flash Sequence',
+                    message: 'Extracting partition images and initializing bootloader / radio flashing. Please keep your Pixel 4 XL connected.'
+                });
 
                 try {
                     const res = await fetch('/api/flash/start', {
@@ -388,11 +463,25 @@ document.addEventListener('DOMContentLoaded', () => {
                         alert(`Flash Start Error: ${data.message}`);
                         isFlashing = false;
                         updateFlashButtonState();
+                        updateFlashMilestone({
+                            step: 1,
+                            phase: 'error',
+                            pct: 0,
+                            title: 'Flash Failed to Start',
+                            message: data.message || 'The flash worker could not be initiated.'
+                        });
                     }
                 } catch (e) {
                     alert(`Error: ${e.message}`);
                     isFlashing = false;
                     updateFlashButtonState();
+                    updateFlashMilestone({
+                        step: 1,
+                        phase: 'error',
+                        pct: 0,
+                        title: 'Flash Failed to Start',
+                        message: e.message
+                    });
                 }
             }
         );
@@ -431,6 +520,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     verifyMsg.innerHTML = `<span style="color: #ef4444">${data.message}</span>`;
                     updateFlashButtonState();
                     logToTerminal(`[FAILED] ${data.message}`, 'error');
+                    updateFlashMilestone({
+                        step: 5,
+                        phase: 'error',
+                        pct: 0,
+                        title: 'Flash Operation Interrupted or Failed',
+                        message: data.message || 'An error occurred during flashing. Check the terminal log below.'
+                    });
                     return;
                 }
 
@@ -443,6 +539,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     relockContainer.classList.remove('hidden');
                     updateFlashButtonState();
                     logToTerminal(`[VERIFIED] ${data.message}`, 'success');
+                    updateFlashMilestone({
+                        step: 6,
+                        phase: 'first_boot',
+                        pct: 100,
+                        title: 'Flash & Boot Verification Completed Successfully',
+                        message: `Device successfully booted into Android ${expectedVer}. Ready for setup or application restores.`
+                    });
                 } else {
                     verifyMsg.textContent = `${data.message} (Polling: ${attempts * 2}s)`;
                 }
@@ -456,6 +559,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 isFlashing = false;
                 verifyMsg.textContent = 'Boot verification timed out. Please check your phone screen manually.';
                 updateFlashButtonState();
+                updateFlashMilestone({
+                    step: 6,
+                    phase: 'first_boot',
+                    pct: 100,
+                    title: 'Verification Window Closed',
+                    message: 'Boot verification polling timed out. If your device reached the Pixel setup screen, flashing was successful.'
+                });
             }
         }, 2000);
     }

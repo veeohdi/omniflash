@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OmniFlash — Pixel 4 XL (coral) Flasher</title>
-    <link rel="stylesheet" href="style.css?v=4">
+    <link rel="stylesheet" href="style.css?v=5">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
 </head>
 <body class="theme-dark">
@@ -180,6 +180,56 @@
                         <button id="btn-start-flash" class="btn btn-danger btn-block btn-lg" disabled>
                             Flash Factory Image (Type 'FLASH')
                         </button>
+
+                        <!-- Live Flash Heads-Up & Milestone Progress Tracker -->
+                        <div id="flash-progress-tracker" class="flash-progress-tracker hidden">
+                            <div class="stepper-bar">
+                                <div class="stepper-step" id="step-node-1" data-step="1">
+                                    <div class="step-circle font-mono">1</div>
+                                    <div class="step-label">Bootloader &amp; Radio</div>
+                                </div>
+                                <div class="stepper-connector"></div>
+                                <div class="stepper-step" id="step-node-2" data-step="2">
+                                    <div class="step-circle font-mono">2</div>
+                                    <div class="step-label">Kernel &amp; AVB</div>
+                                </div>
+                                <div class="stepper-connector"></div>
+                                <div class="stepper-step" id="step-node-3" data-step="3">
+                                    <div class="step-circle font-mono">3</div>
+                                    <div class="step-label">Fastbootd Switch</div>
+                                </div>
+                                <div class="stepper-connector"></div>
+                                <div class="stepper-step" id="step-node-4" data-step="4">
+                                    <div class="step-circle font-mono">4</div>
+                                    <div class="step-label">Super Partitions</div>
+                                </div>
+                                <div class="stepper-connector"></div>
+                                <div class="stepper-step" id="step-node-5" data-step="5">
+                                    <div class="step-circle font-mono">5</div>
+                                    <div class="step-label">Wipe &amp; Reboot</div>
+                                </div>
+                                <div class="stepper-connector"></div>
+                                <div class="stepper-step" id="step-node-6" data-step="6">
+                                    <div class="step-circle font-mono">6</div>
+                                    <div class="step-label">First Boot</div>
+                                </div>
+                            </div>
+
+                            <div class="flash-progress-bar-wrapper">
+                                <div class="flash-progress-bar-track">
+                                    <div id="flash-progress-fill" class="flash-progress-fill" style="width: 0%;"></div>
+                                </div>
+                                <div id="flash-progress-label" class="flash-progress-label font-mono">0%</div>
+                            </div>
+
+                            <div id="headsup-callout" class="headsup-callout">
+                                <div class="headsup-header">
+                                    <span class="headsup-pulse"></span>
+                                    <span id="headsup-title" class="headsup-title">Preparing Flash Sequence...</span>
+                                </div>
+                                <p id="headsup-desc" class="headsup-desc">Device will reboot to bootloader and verify image hashes before starting.</p>
+                            </div>
+                        </div>
                     </div>
                 </section>
 
@@ -261,6 +311,6 @@
         </main>
     </div>
 
-    <script src="app.js?v=4"></script>
+    <script src="app.js?v=5"></script>
 </body>
 </html>
